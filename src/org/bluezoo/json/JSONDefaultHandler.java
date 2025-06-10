@@ -50,4 +50,8 @@ public class JSONDefaultHandler implements JSONContentHandler {
     public void key(String key) throws JSONException {
     }
 
+    @Override
+    public void setLocator(JSONLocator locator) {
+    }
+
 }
