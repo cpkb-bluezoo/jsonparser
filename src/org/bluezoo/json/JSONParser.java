@@ -36,6 +36,9 @@ public class JSONParser {
      */
     public void parse(InputStream in) throws IOException, JSONException {
         JSONTokenizer tokenizer = new JSONTokenizer(in);
+        if (handler != null) {
+            handler.setLocator(tokenizer);
+        }
         ExpectState expectState = ExpectState.VALUE;
         Deque<ContextState> stack = new ArrayDeque<>();
         ContextState current = null;

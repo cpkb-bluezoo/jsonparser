@@ -89,4 +89,15 @@ public interface JSONContentHandler {
      */
     public void key(String key) throws JSONException;
 
+    /**
+     * Receive an object that can be used to determine the current location
+     * during parsing. The locator allows the application to determine the
+     * end position of any parsing-related event, even if the parser is not
+     * reporting an error. Typically, the application will use this
+     * information for reporting its own errors (such as character content
+     * that does not match an application's business rules).
+     * @param locator the locator object
+     */
+    public void setLocator(JSONLocator locator);
+
 }
