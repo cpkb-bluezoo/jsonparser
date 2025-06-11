@@ -1,6 +1,12 @@
 # jsonparser
 JSON parser and serializer for Java
 
+This is a tiny and efficient JSON parser and serialization library for Java.
+It takes up only 20KB, as opposed to object-mapping-based JSON parsers such as
+Apache Jackson (600KB), and is fast and conformant.
+
+Full JavaDoc documentation is included in the package, see the doc subdirectory.
+
 ## Parser
 The parser follows the same pattern as the SAX API for parsing XML.
 You create an implementation of the JSONContentHandler interface.
@@ -94,3 +100,7 @@ An Apache Ant build file is included.
     ant dist
 
 This will create a jar file in the dist subdirectory that you can add to your classpath.
+
+## Conformance
+The parser has been tested with [JSONTestSuite](https://github.com/nst/JSONTestSuite)
+and is fully conformant with that test suite.
