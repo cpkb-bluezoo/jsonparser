@@ -145,7 +145,7 @@ public class JSONParser {
                             case END_ARRAY:
                                 if (current == ContextState.ARRAY) {
                                     if (handler != null) {
-                                        handler.endObject();
+                                        handler.endArray();
                                     }
                                     stack.removeLast();
                                     current = stack.isEmpty() ? null : stack.peekLast();
