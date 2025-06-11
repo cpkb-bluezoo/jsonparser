@@ -9,5 +9,80 @@ only want to implement a subset of the methods. You register this
 handler class on an instance of the JSONParser, then call parse().
 Your handler will be notified of the events in the JSON stream, in order.
 
+### Example
+Here is an example that will simply list all the field names in a JSON file:
+
+    import java.io.*;
+    import org.bluezoo.json.*;
+    
+    public class ListFieldNames extends JSONDefaultHandler {
+    
+        public void key(String key) throws JSONException {
+            System.out.println(key);
+        }
+    
+        public static void main(String[] args) throws Exception {
+            InputStream in = null;
+            try {
+                in = new FileInputStream(args[0]);
+                JSONParser parser = new JSONParser();
+                parser.setContentHandler(new ListFieldNames());
+                parser.parse(in);
+            } finally {
+                in.close();
+            }
+        }
+    
+    }
+
 ## Serializer
-TODO
+The parser follows the same pattern as the javax.xml.stream API for writing XML.
+You create an instance of JSONStreamWriter that wraps an output stream.
+You then call the JSON value construction methods, in order, to construct
+the JSON output representation.
+Note that no special handling is applied to the stream; you will need to flush
+and/or close it yourself if required.
+The JSONStreamWriter can be configured with an indent argument to beautify
+the output and make it more easily human-readable.
+
+### Example
+Here is an example to create a simple JSON file:
+
+    import java.io.*;
+    import org.bluezoo.json.*;
+    
+    public class MakeJohnSmith {
+    
+        public static void main(String[] args) throws Exception {
+            JSONStreamWriter writer = new JSONStreamWriter(System.out, true);
+            writer.writeStartObject();
+            writer.writeKey("first_name");
+            writer.writeString("John");
+            writer.writeKey("last_name");
+            writer.writeString("Smith");
+            writer.writeKey("is_alive");
+            writer.writeBoolean(true);
+            writer.writeKey("age");
+            writer.writeNumber(27);
+            writer.writeKey("height");
+            writer.writeNumber(6.01);
+            writer.writeKey("address");
+            writer.writeStartObject();
+            writer.writeKey("street_address");
+            writer.writeString("21 2nd Street");
+            writer.writeKey("city");
+            writer.writeString("New York");
+            writer.writeEndObject(); // address
+            writer.writeKey("phone_numbers");
+            writer.writeStartArray();
+            writer.writeString("212 555-1234");
+            writer.writeString("646 555-4567");
+            writer.writeEndArray();
+            writer.writeKey("spouse");
+            writer.writeNull();
+            writer.writeEndObject(); // top level object
+            System.out.flush();
+        }
+    
+    }
+
