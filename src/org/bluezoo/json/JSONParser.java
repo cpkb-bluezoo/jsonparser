@@ -43,6 +43,8 @@ public class JSONParser {
         Deque<ContextState> stack = new ArrayDeque<>();
         ContextState current = null;
         Token token = tokenizer.nextToken();
+        boolean seenComma = false;
+        int tokenCount = 0;
         while (token.type != Token.Type.EOF) {
             if (token.type == Token.Type.WHITESPACE) {
                 WhitespaceToken w = (WhitespaceToken) token;
@@ -50,10 +52,12 @@ public class JSONParser {
                     handler.whitespace(w.whitespace);
                 }
             } else {
+                tokenCount++;
                 switch (expectState) {
                     case VALUE:
                         switch (token.type) {
                             case START_OBJECT:
+                                seenComma = false;
                                 current = ContextState.OBJECT;
                                 stack.addLast(current);
                                 expectState = ExpectState.KEY;
@@ -62,6 +66,7 @@ public class JSONParser {
                                 }
                                 break;
                             case START_ARRAY:
+                                seenComma = false;
                                 current = ContextState.ARRAY;
                                 stack.addLast(current);
                                 expectState = ExpectState.VALUE;
@@ -70,6 +75,7 @@ public class JSONParser {
                                 }
                                 break;
                             case NUMBER:
+                                seenComma = false;
                                 NumberToken n = (NumberToken) token;
                                 if (handler != null) {
                                     handler.numberValue(n.number);
@@ -77,6 +83,7 @@ public class JSONParser {
                                 expectState = (current == null) ? ExpectState.EOF :  ExpectState.COMMA_OR_CLOSE;
                                 break;
                             case STRING:
+                                seenComma = false;
                                 StringToken s = (StringToken) token;
                                 if (handler != null) {
                                     handler.stringValue(s.string);
@@ -84,6 +91,7 @@ public class JSONParser {
                                 expectState = (current == null) ? ExpectState.EOF :  ExpectState.COMMA_OR_CLOSE;
                                 break;
                             case BOOLEAN:
+                                seenComma = false;
                                 BooleanToken b = (BooleanToken) token;
                                 if (handler != null) {
                                     handler.booleanValue(b.value);
@@ -91,37 +99,72 @@ public class JSONParser {
                                 expectState = (current == null) ? ExpectState.EOF :  ExpectState.COMMA_OR_CLOSE;
                                 break;
                             case NULL:
+                                seenComma = false;
                                 if (handler != null) {
                                     handler.nullValue();
                                 }
                                 expectState = (current == null) ? ExpectState.EOF :  ExpectState.COMMA_OR_CLOSE;
+                                break;
+                            case END_ARRAY:
+                                if (current == ContextState.ARRAY) {
+                                    if (seenComma) {
+                                        throw new JSONException("Trailing comma in array");
+                                    }
+                                    if (handler != null) {
+                                        handler.endArray();
+                                    }
+                                    stack.removeLast();
+                                    current = stack.isEmpty() ? null : stack.peekLast();
+                                    expectState = (current == null) ? ExpectState.EOF :  ExpectState.COMMA_OR_CLOSE;
+                                } else {
+                                    throw new JSONException("Encountered end of array outside array: "+token);
+                                }
                                 break;
                             default:
                                 throw new JSONException("Unexpected token: "+token);
                         }
                         break;
                     case KEY:
-                        if (token.type == Token.Type.STRING) {
-                            StringToken s = (StringToken) token;
-                            if (handler != null) {
-                                handler.key(s.string);
-                            }
-                            // Must be followed by colon
-                            token = tokenizer.nextToken();
-                            if (token.type == Token.Type.WHITESPACE) {
+                        switch (token.type) {
+                            case STRING:
+                                StringToken s = (StringToken) token;
+                                if (handler != null) {
+                                    handler.key(s.string);
+                                }
+                                // Must be followed by colon
                                 token = tokenizer.nextToken();
-                            }
-                            if (token.type != Token.Type.COLON) {
-                                throw new JSONException("Key not followed by colon: "+token);
-                            }
-                            expectState = ExpectState.VALUE;
-                        } else {
-                            throw new JSONException("Unexpected token: "+token);
+                                if (token.type == Token.Type.WHITESPACE) {
+                                    token = tokenizer.nextToken();
+                                }
+                                if (token.type != Token.Type.COLON) {
+                                    throw new JSONException("Key not followed by colon: "+token);
+                                }
+                                expectState = ExpectState.VALUE;
+                                break;
+                            case END_OBJECT:
+                                if (current == ContextState.OBJECT) {
+                                    if (seenComma) {
+                                        throw new JSONException("Trailing comma in object");
+                                    }
+                                    if (handler != null) {
+                                        handler.endObject();
+                                    }
+                                    stack.removeLast();
+                                    current = stack.isEmpty() ? null : stack.peekLast();
+                                    expectState = (current == null) ? ExpectState.EOF :  ExpectState.COMMA_OR_CLOSE;
+                                } else {
+                                    throw new JSONException("Encountered end of object outside object: "+token);
+                                }
+                                break;
+                            default:
+                                throw new JSONException("Unexpected token: "+token);
                         }
                         break;
                     case COMMA_OR_CLOSE:
+                        seenComma = false;
                         switch (token.type) {
                             case COMMA:
+                                seenComma = true;
                                 if (current == ContextState.OBJECT) {
                                     expectState = ExpectState.KEY;
                                 } else if (current == ContextState.ARRAY) {
@@ -163,6 +206,12 @@ public class JSONParser {
                 }
             }
             token = tokenizer.nextToken();
+        }
+        if (!stack.isEmpty()) {
+            throw new JSONException("Unclosed object or array");
+        }
+        if (tokenCount == 0) {
+            throw new JSONException("No data");
         }
     }
 

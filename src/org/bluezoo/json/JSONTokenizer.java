@@ -4,6 +4,8 @@ import java.io.BufferedInputStream;
 import java.io.EOFException;
 import java.io.InputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 
 /**
  * A JSON tokenizer. This follows the rules given in ECMA 404.
@@ -232,7 +234,7 @@ class JSONTokenizer implements JSONLocator {
                 columnNumber = 1;
                 buf.append((char) c);
                 last = c;
-            } else if (c == SPACE || c == TAB || c == FF) {
+            } else if (c == SPACE || c == TAB) {
                 columnNumber++;
                 buf.append((char) c);
                 last = c;
@@ -258,6 +260,8 @@ class JSONTokenizer implements JSONLocator {
         if (c == 0x30) { // 0
             buf.append((char) c);
             columnNumber++;
+            in.mark(1);
+            c = in.read();
         } else if (c >= 0x31 && c <= 0x39) { // 1-9
             do {
                 columnNumber++;
@@ -272,12 +276,17 @@ class JSONTokenizer implements JSONLocator {
         // Expecting: .|e|E|EOF
         if (c == -1 || (c != 0x2e && c != 0x65 && c != 0x45)) { // integer
             in.reset();
-            long l = Long.parseLong(buf.toString());
-            if (l >= (long) Integer.MIN_VALUE && l <= (long) Integer.MAX_VALUE) {
-                // Store it as an integer to reduce memory cost
-                return new NumberToken(Integer.valueOf((int) l));
-            } else {
-                return new NumberToken(Long.valueOf(l));
+            try {
+                long l = Long.parseLong(buf.toString());
+                if (l >= (long) Integer.MIN_VALUE && l <= (long) Integer.MAX_VALUE) {
+                    // Store it as an integer to reduce memory cost
+                    return new NumberToken(Integer.valueOf((int) l));
+                } else {
+                    return new NumberToken(Long.valueOf(l));
+                }
+            } catch (NumberFormatException e) {
+                // Could be too large. Try BigInteger
+                return new NumberToken(new BigInteger(buf.toString()));
             }
         }
         boolean hasFractionalPart = (c == 0x2e); // .
@@ -324,7 +333,11 @@ class JSONTokenizer implements JSONLocator {
             // exponent part complete
         }
         in.reset();
-        return new NumberToken(Double.valueOf(buf.toString()));
+        try {
+            return new NumberToken(Double.valueOf(buf.toString()));
+        } catch (NumberFormatException e) {
+            return new NumberToken(new BigDecimal(buf.toString()));
+        }
     }
 
 }
