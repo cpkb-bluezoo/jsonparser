@@ -86,3 +86,11 @@ Here is an example to create a simple JSON file:
     
     }
 
+## Installation
+An Apache Ant build file is included.
+
+    git clone https://github.com/cpkb-bluezoo/jsonparser.git
+    cd jsonparser
+    ant dist
+
+This will create a jar file in the dist subdirectory that you can add to your classpath.
