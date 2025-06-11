@@ -20,12 +20,12 @@ import java.io.OutputStream;
  */
 public class JSONStreamWriter {
 
-    enum State { INIT, SEEN_KEY, SEEN_VALUE };
+    enum State { INIT0, INIT, SEEN_KEY, SEEN_VALUE };
 
     private final OutputStream out;
     private final boolean indent;
     private int depth;
-    private State state = State.INIT;
+    private State state = State.INIT0;
 
     /**
      * Constructor for a JSON serializer.
