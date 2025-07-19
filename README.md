@@ -104,3 +104,23 @@ This will create a jar file in the dist subdirectory that you can add to your cl
 ## Conformance
 The parser has been tested with [JSONTestSuite](https://github.com/nst/JSONTestSuite)
 and is fully conformant with that test suite.
+
+## Maven integration
+You can incorporate this project directly into your Maven project.
+To do so, add the following elements to your project's pom.xml :
+
+    <repositories>
+        <repository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.github.cpkb-bluezoo</groupId>
+            <artifactId>jsonparser</artifactId>
+            <version>v1.0.1</version>
+        </dependency>
+    </dependencies>
+
