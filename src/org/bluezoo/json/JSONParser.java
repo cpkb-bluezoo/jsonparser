@@ -14,6 +14,7 @@ import java.util.Deque;
  */
 public class JSONParser {
 
+    // Parser state management
     enum ExpectState { VALUE, KEY, COMMA_OR_CLOSE, EOF };
     enum ContextState { OBJECT, ARRAY };
 
@@ -29,13 +30,28 @@ public class JSONParser {
 
     /**
      * Parse an input stream containing JSON data, and report parsing events
-     * in it to the registered handler.
+     * in it to the registered handler. The stream is assumed to be a
+     * Unicode stream and will default to UTF-8 in the absence of a byte
+     * order mark or UTF-16/UTF-32 characteristics.
      * @param in the input stream
      * @throws IOException if there was an I/O error reading the stream
      * @throws JSONException if there was a problem processing the JSON stream
      */
     public void parse(InputStream in) throws IOException, JSONException {
-        JSONTokenizer tokenizer = new JSONTokenizer(in);
+        parse(in, null);
+    }
+
+    /**
+     * Parse an input stream containing JSON data, and report parsing events
+     * in it to the registered handler.
+     * @param in the input stream
+     * @param charset the character set of the input stream (if supplied
+     * using <code>charset</code> MIME parameter)
+     * @throws IOException if there was an I/O error reading the stream
+     * @throws JSONException if there was a problem processing the JSON stream
+     */
+    public void parse(InputStream in, String charset) throws IOException, JSONException {
+        JSONTokenizer tokenizer = new JSONTokenizer(in, charset);
         if (handler != null) {
             handler.setLocator(tokenizer);
         }
