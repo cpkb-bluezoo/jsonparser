@@ -120,7 +120,7 @@ To do so, add the following elements to your project's pom.xml :
         <dependency>
             <groupId>com.github.cpkb-bluezoo</groupId>
             <artifactId>jsonparser</artifactId>
-            <version>v1.0.1</version>
+            <version>1.0.2</version>
         </dependency>
     </dependencies>
 
