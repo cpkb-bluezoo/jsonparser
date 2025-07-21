@@ -7,6 +7,8 @@ Apache Jackson (600KB), and is fast and conformant.
 
 Full JavaDoc documentation is included in the package, see the doc subdirectory.
 
+**[View API documentation online](https://cpkb-bluezoo.github.io/jsonparser/doc/)
+
 ## Parser
 The parser follows the same pattern as the SAX API for parsing XML.
 You create an implementation of the JSONContentHandler interface.
