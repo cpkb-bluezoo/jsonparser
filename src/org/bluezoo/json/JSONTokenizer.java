@@ -1,9 +1,12 @@
 package org.bluezoo.json;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.EOFException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.IOException;
+import java.io.Reader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 
@@ -47,13 +50,77 @@ class JSONTokenizer implements JSONLocator {
     private static final Token TOKEN_START_ARRAY = new Token(Token.Type.START_ARRAY);
     private static final Token TOKEN_END_ARRAY = new Token(Token.Type.END_ARRAY);
 
-    private StringBuilder buf;
-    private InputStream in;
+    private final StringBuilder buf;
+    private final Reader in;
 
     private int lineNumber = 1, columnNumber = 1;
 
-    JSONTokenizer(InputStream in) {
-        this.in = in.markSupported() ? in : new BufferedInputStream(in);
+    private static final int[] UTF8_BOM = new int[] { 0xEF, 0xBB, 0xBF};
+    private static final int[] UTF16_BE_BOM = new int[] { 0xFE, 0xFF};
+    private static final int[] UTF16_LE_BOM = new int[] { 0xFF, 0xFE};
+    private static final int[] UTF32_BE_BOM = new int[] { 0x00, 0x00, 0xFE, 0xFF};
+    private static final int[] UTF32_LE_BOM = new int[] { 0xFF, 0xFE, 0x00, 0x00};
+
+    /**
+     * @param in the underlying input stream
+     * @param charset the stream's character set, if specified
+     */
+    JSONTokenizer(InputStream in, String charset) throws IOException {
+        if (charset == null) {
+            // Determine the Unicode character set to use by looking at the
+            // first four bytes of the stream
+            if (!in.markSupported()) {
+                in = new BufferedInputStream(in);
+            }
+            in.mark(4);
+            int c0 = in.read();
+            int c1 = in.read();
+            int c2 = in.read();
+            int c3 = in.read();
+            in.reset();
+            // Check for byte order mark first
+            if (c0 == 0xef && c1 == 0xbb && c2 == 0xbf) { // UTF-8 BOM
+                in.read();
+                in.read();
+                in.read();
+                charset = "UTF-8";
+            } else if (c0 == 0 && c1 == 0 && c2 == 0xfe && c3 == 0xff) { // UTF-32BE BOM
+                in.read();
+                in.read();
+                in.read();
+                in.read();
+                charset = "UTF-32BE";
+            } else if (c0 == 0xff && c1 == 0xfe && c2 == 0 && c3 == 0) { // UTF-32LE BOM
+                in.read();
+                in.read();
+                in.read();
+                in.read();
+                charset = "UTF-32LE";
+            } else if (c0 == 0xfe && c1 == 0xff) { // UTF-16BE BOM
+                in.read();
+                in.read();
+                charset = "UTF-16BE";
+            } else if (c0 == 0xff && c1 == 0xfe) { // UTF-16LE BOM
+                in.read();
+                in.read();
+                charset = "UTF-16LE";
+            }
+            if (charset == null) { // autodetect algorithm
+                if (c0 == 0 && c1 == 0 && c2 == 0) {
+                    charset = "UTF-32BE";
+                } else if (c0 == 0 && c2 == 0) {
+                    charset = "UTF-16BE";
+                } else if (c1 == 0 && c2 == 0 && c3 == 0) {
+                    charset = "UTF-32LE";
+                } else if (c1 == 0 && c3 == 0) {
+                    charset = "UTF-16LE";
+                } else {
+                    charset = "UTF-8";
+                }
+            }
+        }
+        Reader reader = new InputStreamReader(in, charset);
+        this.in = reader.markSupported() ? reader : new BufferedReader(reader); // need to mark
         buf = new StringBuilder();
     }
 
