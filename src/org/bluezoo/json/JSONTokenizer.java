@@ -270,7 +270,7 @@ class JSONTokenizer implements JSONLocator {
         columnNumber++;
         int d4 = unhex(in.read());
         columnNumber++;
-        int ret = d4 | (d3 << 0x10) | (d2 << 0x100) | (d1 << 0x1000);
+        int ret = d4 | (d3 << 4) | (d2 << 8) | (d1 << 12);
         return (char) ret;
     }
 
