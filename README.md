@@ -10,38 +10,118 @@ Full JavaDoc documentation is included in the package, see the doc subdirectory.
 **[View API documentation online](https://cpkb-bluezoo.github.io/jsonparser/doc/)
 
 ## Parser
-The parser follows the same pattern as the SAX API for parsing XML.
-You create an implementation of the JSONContentHandler interface.
-There is a handy JSONDefaultHandler class that you can subclass if you
-only want to implement a subset of the methods. You register this
-handler class on an instance of the JSONParser, then call parse().
-Your handler will be notified of the events in the JSON stream, in order.
 
-### Example
-Here is an example that will simply list all the field names in a JSON file:
+### Asynchronous, Non-Blocking API (Primary)
 
-    import java.io.*;
-    import org.bluezoo.json.*;
+The `JSONParser` is designed as an **asynchronous-first, non-blocking, data-driven parser** that integrates seamlessly into event-driven architectures. Instead of blocking on I/O operations, it uses a **push model** where you feed bytes to the parser as they arrive from any source—network sockets, async file I/O, message queues, or any streaming data pipeline.
+
+This design makes the parser ideal for:
+- **Non-blocking I/O** systems (NIO, async frameworks)
+- **Event-driven architectures** (reactive streams, actors)
+- **High-concurrency servers** where blocking is prohibitive
+- **Data pipeline architectures** where JSON transformation is one stage
+
+#### How It Works
+
+The parser maintains internal state between calls, buffering incomplete tokens and emitting parsing events via the SAX-like `JSONContentHandler` interface as soon as complete tokens are recognized. This allows it to operate as a **streaming transformer** in a data pipeline, converting raw byte chunks into semantic JSON events.
+
+**Core Methods:**
+- `receive(ByteBuffer data)` - Push a chunk of bytes into the parser
+- `close()` - Signal end of input and validate document completeness
+
+#### Async Streaming Example
+
+```java
+import java.nio.ByteBuffer;
+import org.bluezoo.json.*;
+
+public class AsyncJSONProcessor extends JSONDefaultHandler {
     
-    public class ListFieldNames extends JSONDefaultHandler {
-    
-        public void key(String key) throws JSONException {
-            System.out.println(key);
-        }
-    
-        public static void main(String[] args) throws Exception {
-            InputStream in = null;
-            try {
-                in = new FileInputStream(args[0]);
-                JSONParser parser = new JSONParser();
-                parser.setContentHandler(new ListFieldNames());
-                parser.parse(in);
-            } finally {
-                in.close();
-            }
-        }
-    
+    @Override
+    public void key(String key) throws JSONException {
+        System.out.println("Key: " + key);
     }
+    
+    @Override
+    public void stringValue(String value) throws JSONException {
+        System.out.println("String: " + value);
+    }
+    
+    public static void processAsyncData() throws JSONException {
+        JSONParser parser = new JSONParser();
+        parser.setContentHandler(new AsyncJSONProcessor());
+        
+        // Simulate async data arrival - feed bytes as they arrive
+        // from network, file, queue, etc.
+        ByteBuffer chunk1 = ByteBuffer.wrap("{\"name\":".getBytes());
+        parser.receive(chunk1);
+        
+        ByteBuffer chunk2 = ByteBuffer.wrap("\"Alice\",".getBytes());
+        parser.receive(chunk2);
+        
+        ByteBuffer chunk3 = ByteBuffer.wrap("\"age\":30}".getBytes());
+        parser.receive(chunk3);
+        
+        // Signal completion
+        parser.close();
+    }
+}
+```
+
+This non-blocking approach means your application can:
+- Process JSON data as it arrives without waiting for complete documents
+- Integrate with async I/O frameworks (Netty, Vert.x, etc.)
+- Build reactive data pipelines where JSON parsing is a transformation stage
+- Handle multiple concurrent JSON streams without thread-per-connection
+
+### Traditional Blocking API (Convenience)
+
+For simpler use cases where blocking I/O is acceptable, a traditional `parse(InputStream)` method is provided as a convenience wrapper. It internally delegates to the streaming API by reading the stream in chunks.
+
+#### Blocking Example
+
+```java
+import java.io.*;
+import org.bluezoo.json.*;
+
+public class ListFieldNames extends JSONDefaultHandler {
+    
+    public void key(String key) throws JSONException {
+        System.out.println(key);
+    }
+    
+    public static void main(String[] args) throws Exception {
+        InputStream in = null;
+        try {
+            in = new FileInputStream(args[0]);
+            JSONParser parser = new JSONParser();
+            parser.setContentHandler(new ListFieldNames());
+            parser.parse(in);  // Convenience method - blocks until complete
+        } finally {
+            in.close();
+        }
+    }
+}
+```
+
+### Event-Driven Design
+
+The parser follows the same event-driven pattern as the SAX API for parsing XML.
+You create an implementation of the `JSONContentHandler` interface to receive parsing events.
+There is a handy `JSONDefaultHandler` class that you can subclass if you
+only want to implement a subset of the methods.
+
+Your handler will be notified of events in the JSON stream as they are recognized:
+- `startObject()` / `endObject()` - Object boundaries
+- `startArray()` / `endArray()` - Array boundaries  
+- `key(String)` - Object field names
+- `stringValue(String)` - String values
+- `numberValue(Number)` - Numeric values
+- `booleanValue(boolean)` - Boolean values
+- `nullValue()` - Null values
+- `whitespace(String)` - Whitespace (if needed for pretty-printing)
+
+This event-driven model allows you to build custom JSON processors without materializing the entire document in memory—perfect for processing large JSON streams or building transformation pipelines.
 
 ## Serializer
 The parser follows the same pattern as the javax.xml.stream API for writing XML.

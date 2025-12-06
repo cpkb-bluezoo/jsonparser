@@ -30,7 +30,7 @@ import java.io.IOException;
  * to pretty-print JSON files. This example shows the SAX-like parsing
  * pattern where events are captured and replayed through the stream writer.
  *
- * Usage: java org.bluezoo.json.JSONPrettyPrinter <input-file>
+ * Usage: java org.bluezoo.json.JSONPrettyPrinter &lt;input-file&gt;
  *
  * @author <a href='mailto:dog@gnu.org'>Chris Burdess</a>
  */
