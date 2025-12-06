@@ -126,3 +126,7 @@ To do so, add the following elements to your project's pom.xml :
         </dependency>
     </dependencies>
 
+## License
+This project is licensed under the GNU Lesser General Public License v3.0 (LGPLv3).
+See the [COPYING](COPYING) file for details.
+

@@ -1,0 +1,6 @@
+#!/bin/sh
+
+jsonparser=$HOME/cpkb-bluezoo/jsonparser
+build=$jsonparser/build
+
+java -cp $build org.bluezoo.json.JSONPrettyPrinter $*
