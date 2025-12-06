@@ -23,6 +23,17 @@ This design makes the parser ideal for:
 - **High-concurrency servers** where blocking is prohibitive
 - **Data pipeline architectures** where JSON transformation is one stage
 
+Traditional object-mapping based JSON parsers such as GSON or Jasper, in
+contrast, are **blocking** - your application thread has to block while it
+processes the entire message. If the message hasn't been completely
+delivered yet, your entire process has to wait. Then when it finally
+produces the parse result, that result is an object taking up memory
+proportional to the size of the JSON message. With an event-based parser,
+you have as little memory overhead as you want: you decide how large the
+chunks are, there is no memory overhead beyond that and JSON semantic events
+are ready to process before the parse is complete and even before the
+message has finished arriving over the network: near-zero latency.
+
 #### How It Works
 
 The parser maintains internal state between calls, buffering incomplete tokens and emitting parsing events via the SAX-like `JSONContentHandler` interface as soon as complete tokens are recognized. This allows it to operate as a **streaming transformer** in a data pipeline, converting raw byte chunks into semantic JSON events.
