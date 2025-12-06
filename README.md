@@ -2,7 +2,7 @@
 JSON parser and serializer for Java
 
 This is a tiny and efficient JSON parser and serialization library for Java.
-It takes up only 20KB, as opposed to object-mapping-based JSON parsers such as
+It takes up only 30KB, as opposed to object-mapping-based JSON parsers such as
 Apache Jackson (600KB), and is fast and conformant.
 
 Full JavaDoc documentation is included in the package, see the doc subdirectory.
