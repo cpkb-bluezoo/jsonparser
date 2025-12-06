@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="1200" height="700" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700">
+  <defs>
+    <style>
+      .title { font: bold 24px sans-serif; fill: #2c3e50; }
+      .subtitle { font: 14px sans-serif; fill: #7f8c8d; }
+      .label { font: bold 14px sans-serif; fill: #2c3e50; }
+      .text { font: 12px sans-serif; fill: #34495e; }
+      .small-text { font: 11px sans-serif; fill: #7f8c8d; }
+      .code { font: 11px monospace; fill: #2980b9; }
+      .box { fill: #ecf0f1; stroke: #34495e; stroke-width: 2; }
+      .highlight-box { fill: #3498db; stroke: #2980b9; stroke-width: 3; }
+      .source-box { fill: #e74c3c; stroke: #c0392b; stroke-width: 2; }
+      .buffer-box { fill: #f39c12; stroke: #d68910; stroke-width: 2; }
+      .handler-box { fill: #2ecc71; stroke: #27ae60; stroke-width: 2; }
+      .arrow { stroke: #34495e; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .data-arrow { stroke: #e67e22; stroke-width: 3; fill: none; marker-end: url(#data-arrowhead); }
+      .benefit-text { font: bold 13px sans-serif; fill: #27ae60; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#34495e" />
+    </marker>
+    <marker id="data-arrowhead" markerWidth="12" markerHeight="12" refX="11" refY="4" orient="auto">
+      <polygon points="0 0, 12 4, 0 8" fill="#e67e22" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" text-anchor="middle" class="title">JSONParser NIO Event Pipeline</text>
+  <text x="600" y="55" text-anchor="middle" class="subtitle">Non-blocking, streaming data transformation architecture</text>
+
+  <!-- Source: Network/SSL Layer -->
+  <g id="source">
+    <rect x="40" y="120" width="160" height="200" rx="8" class="source-box" opacity="0.9"/>
+    <text x="120" y="145" text-anchor="middle" class="label" fill="white">Data Sources</text>
+    
+    <!-- Network Socket -->
+    <rect x="55" y="160" width="130" height="35" rx="4" fill="#c0392b" opacity="0.7"/>
+    <text x="120" y="182" text-anchor="middle" class="text" fill="white">Network Socket</text>
+    
+    <!-- SSL/TLS -->
+    <rect x="55" y="205" width="130" height="35" rx="4" fill="#c0392b" opacity="0.7"/>
+    <text x="120" y="227" text-anchor="middle" class="text" fill="white">SSL/TLS Unwrap</text>
+    
+    <!-- File/Stream -->
+    <rect x="55" y="250" width="130" height="35" rx="4" fill="#c0392b" opacity="0.7"/>
+    <text x="120" y="272" text-anchor="middle" class="text" fill="white">Async File I/O</text>
+    
+    <text x="120" y="305" text-anchor="middle" class="small-text">Raw bytes arrive</text>
+  </g>
+
+  <!-- ByteBuffer Chunks -->
+  <g id="buffers">
+    <rect x="250" y="120" width="160" height="200" rx="8" class="buffer-box" opacity="0.9"/>
+    <text x="330" y="145" text-anchor="middle" class="label" fill="white">ByteBuffer</text>
+    <text x="330" y="163" text-anchor="middle" class="label" fill="white">Chunks</text>
+    
+    <!-- Chunk representations -->
+    <rect x="265" y="180" width="130" height="25" rx="2" fill="#d68910" opacity="0.6"/>
+    <text x="330" y="197" text-anchor="middle" class="code" fill="white">{"na</text>
+    
+    <rect x="265" y="215" width="130" height="25" rx="2" fill="#d68910" opacity="0.6"/>
+    <text x="330" y="232" text-anchor="middle" class="code" fill="white">me":"</text>
+    
+    <rect x="265" y="250" width="130" height="25" rx="2" fill="#d68910" opacity="0.6"/>
+    <text x="330" y="267" text-anchor="middle" class="code" fill="white">Alice</text>
+    
+    <text x="330" y="295" text-anchor="middle" class="small-text">Bounded chunks</text>
+    <text x="330" y="310" text-anchor="middle" class="small-text">User controlled size</text>
+  </g>
+
+  <!-- Arrow from source to buffer -->
+  <path d="M 200 220 L 250 220" class="data-arrow"/>
+  <text x="225" y="210" text-anchor="middle" class="small-text">async</text>
+
+  <!-- JSONParser (Center, highlighted) -->
+  <g id="parser">
+    <rect x="460" y="100" width="280" height="240" rx="8" class="highlight-box" opacity="0.95"/>
+    <text x="600" y="130" text-anchor="middle" class="label" fill="white" font-size="18">JSONParser</text>
+    <text x="600" y="150" text-anchor="middle" class="small-text" fill="white">Event-driven transformer</text>
+    
+    <!-- receive() method -->
+    <rect x="475" y="165" width="250" height="35" rx="4" fill="#2980b9" opacity="0.7"/>
+    <text x="600" y="188" text-anchor="middle" class="code" fill="white" font-size="13">receive(ByteBuffer chunk)</text>
+    
+    <!-- Internal state -->
+    <g transform="translate(480, 210)">
+      <rect x="0" y="0" width="240" height="70" rx="3" fill="#1a5490" opacity="0.5"/>
+      <text x="120" y="18" text-anchor="middle" class="small-text" fill="white">Internal State Buffer</text>
+      <text x="120" y="35" text-anchor="middle" class="small-text" fill="#ecf0f1">• Token accumulation</text>
+      <text x="120" y="50" text-anchor="middle" class="small-text" fill="#ecf0f1">• Position tracking</text>
+      <text x="120" y="65" text-anchor="middle" class="small-text" fill="#ecf0f1">• Incomplete token buffering</text>
+    </g>
+    
+    <!-- close() method -->
+    <rect x="475" y="295" width="250" height="30" rx="4" fill="#2980b9" opacity="0.7"/>
+    <text x="600" y="315" text-anchor="middle" class="code" fill="white" font-size="13">close()</text>
+  </g>
+
+  <!-- Arrow from buffer to parser -->
+  <path d="M 410 220 L 460 220" class="data-arrow"/>
+  <text x="435" y="210" text-anchor="middle" class="code" fill="#e67e22">receive()</text>
+
+  <!-- JSON Events -->
+  <g id="events">
+    <rect x="790" y="120" width="160" height="200" rx="8" class="box" opacity="0.9"/>
+    <text x="870" y="145" text-anchor="middle" class="label">JSON Events</text>
+    <text x="870" y="161" text-anchor="middle" class="small-text">(Immediate)</text>
+    
+    <!-- Event list -->
+    <g transform="translate(800, 175)">
+      <text x="70" y="0" text-anchor="middle" class="code">startObject()</text>
+      <text x="70" y="20" text-anchor="middle" class="code">key("name")</text>
+      <text x="70" y="40" text-anchor="middle" class="code">stringValue("Alice")</text>
+      <text x="70" y="60" text-anchor="middle" class="code">key("age")</text>
+      <text x="70" y="80" text-anchor="middle" class="code">numberValue(30)</text>
+      <text x="70" y="100" text-anchor="middle" class="code">endObject()</text>
+    </g>
+    
+    <text x="870" y="290" text-anchor="middle" class="small-text">Semantic tokens</text>
+    <text x="870" y="305" text-anchor="middle" class="small-text">Emitted immediately</text>
+  </g>
+
+  <!-- Arrow from parser to events -->
+  <path d="M 740 220 L 790 220" class="data-arrow"/>
+  <text x="765" y="210" text-anchor="middle" class="small-text">fire</text>
+
+  <!-- Handler/Application -->
+  <g id="handler">
+    <rect x="1000" y="120" width="160" height="200" rx="8" class="handler-box" opacity="0.9"/>
+    <text x="1080" y="145" text-anchor="middle" class="label" fill="white">Handler</text>
+    <text x="1080" y="161" text-anchor="middle" class="small-text" fill="white">Your Application</text>
+    
+    <!-- Processing steps -->
+    <g transform="translate(1010, 180)">
+      <text x="70" y="0" text-anchor="middle" class="text" fill="white">• Validate data</text>
+      <text x="70" y="22" text-anchor="middle" class="text" fill="white">• Transform</text>
+      <text x="70" y="44" text-anchor="middle" class="text" fill="white">• Store to DB</text>
+      <text x="70" y="66" text-anchor="middle" class="text" fill="white">• Forward events</text>
+      <text x="70" y="88" text-anchor="middle" class="text" fill="white">• Build objects</text>
+    </g>
+    
+    <text x="1080" y="285" text-anchor="middle" class="small-text" fill="white">Process while</text>
+    <text x="1080" y="300" text-anchor="middle" class="small-text" fill="white">streaming</text>
+  </g>
+
+  <!-- Arrow from events to handler -->
+  <path d="M 950 220 L 1000 220" class="data-arrow"/>
+
+  <!-- Key Benefits Section -->
+  <g id="benefits">
+    <text x="60" y="380" class="label">Key Benefits:</text>
+    
+    <!-- Non-blocking -->
+    <circle cx="70" cy="410" r="5" fill="#27ae60"/>
+    <text x="85" y="415" class="benefit-text">Non-blocking:</text>
+    <text x="195" y="415" class="text">No thread blocked on I/O</text>
+    
+    <!-- Memory efficient -->
+    <circle cx="70" cy="440" r="5" fill="#27ae60"/>
+    <text x="85" y="445" class="benefit-text">Memory efficient:</text>
+    <text x="220" y="445" class="text">Bounded buffers, streaming processing</text>
+    
+    <!-- Immediate processing -->
+    <circle cx="70" cy="470" r="5" fill="#27ae60"/>
+    <text x="85" y="475" class="benefit-text">Immediate processing:</text>
+    <text x="245" y="475" class="text">Events available as tokens complete</text>
+    
+    <!-- High concurrency -->
+    <circle cx="70" cy="500" r="5" fill="#27ae60"/>
+    <text x="85" y="505" class="benefit-text">High concurrency:</text>
+    <text x="215" y="505" class="text">Handle many streams with few threads</text>
+    
+    <!-- Pipeline composability -->
+    <circle cx="70" cy="530" r="5" fill="#27ae60"/>
+    <text x="85" y="535" class="benefit-text">Pipeline composable:</text>
+    <text x="235" y="535" class="text">Chain with other transformers</text>
+
+    <!-- Backpressure aware -->
+    <circle cx="70" cy="560" r="5" fill="#27ae60"/>
+    <text x="85" y="565" class="benefit-text">Backpressure aware:</text>
+    <text x="230" y="565" class="text">Control flow via buffer management</text>
+  </g>
+
+  <!-- Data Flow Timeline -->
+  <g id="timeline">
+    <text x="650" y="380" class="label">Data Flow Timeline:</text>
+    
+    <!-- Timeline line -->
+    <line x1="650" y1="400" x2="1150" y2="400" stroke="#95a5a6" stroke-width="2"/>
+    
+    <!-- Time markers -->
+    <g transform="translate(650, 400)">
+      <!-- T0 -->
+      <circle cx="0" cy="0" r="4" fill="#3498db"/>
+      <line x1="0" y1="0" x2="0" y2="20" stroke="#95a5a6" stroke-width="1"/>
+      <text x="0" y="35" text-anchor="middle" class="small-text">T0</text>
+      <text x="0" y="50" text-anchor="middle" class="small-text">receive</text>
+      <text x="0" y="63" text-anchor="middle" class="small-text">chunk 1</text>
+      
+      <!-- T1 -->
+      <circle cx="125" cy="0" r="4" fill="#3498db"/>
+      <line x1="125" y1="0" x2="125" y2="20" stroke="#95a5a6" stroke-width="1"/>
+      <text x="125" y="35" text-anchor="middle" class="small-text">T1</text>
+      <text x="125" y="50" text-anchor="middle" class="small-text">emit</text>
+      <text x="125" y="63" text-anchor="middle" class="small-text">startObject</text>
+      
+      <!-- T2 -->
+      <circle cx="250" cy="0" r="4" fill="#3498db"/>
+      <line x1="250" y1="0" x2="250" y2="20" stroke="#95a5a6" stroke-width="1"/>
+      <text x="250" y="35" text-anchor="middle" class="small-text">T2</text>
+      <text x="250" y="50" text-anchor="middle" class="small-text">receive</text>
+      <text x="250" y="63" text-anchor="middle" class="small-text">chunk 2</text>
+      
+      <!-- T3 -->
+      <circle cx="375" cy="0" r="4" fill="#3498db"/>
+      <line x1="375" y1="0" x2="375" y2="20" stroke="#95a5a6" stroke-width="1"/>
+      <text x="375" y="35" text-anchor="middle" class="small-text">T3</text>
+      <text x="375" y="50" text-anchor="middle" class="small-text">emit key,</text>
+      <text x="375" y="63" text-anchor="middle" class="small-text">value events</text>
+      
+      <!-- T4 -->
+      <circle cx="500" cy="0" r="4" fill="#2ecc71"/>
+      <line x1="500" y1="0" x2="500" y2="20" stroke="#95a5a6" stroke-width="1"/>
+      <text x="500" y="35" text-anchor="middle" class="small-text">T4</text>
+      <text x="500" y="50" text-anchor="middle" class="small-text">close()</text>
+      <text x="500" y="63" text-anchor="middle" class="small-text">complete</text>
+    </g>
+    
+    <text x="900" y="430" text-anchor="middle" class="small-text" fill="#7f8c8d">Events emitted incrementally while data still streaming</text>
+  </g>
+
+  <!-- Network annotation -->
+  <g id="network-note">
+    <rect x="650" y="480" width="500" height="80" rx="6" fill="#ecf0f1" stroke="#95a5a6" stroke-width="1" opacity="0.8"/>
+    <text x="900" y="502" text-anchor="middle" class="label">🌐 Network Streaming</text>
+    <text x="900" y="522" text-anchor="middle" class="text">Data arrives over network in chunks (T0, T2...)</text>
+    <text x="900" y="540" text-anchor="middle" class="text">Parser emits events immediately (T1, T3...)</text>
+    <text x="900" y="558" text-anchor="middle" class="text">Application processes results while more data arrives</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="600" y="680" text-anchor="middle" class="small-text" fill="#95a5a6">
+    JSONParser integrates seamlessly into NIO/async architectures • No blocking • Constant memory • Immediate results
+  </text>
+</svg>
+
