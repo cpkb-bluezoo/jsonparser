@@ -15,6 +15,8 @@ Full JavaDoc documentation is included in the package, see the doc subdirectory.
 
 The `JSONParser` is designed as an **asynchronous-first, non-blocking, data-driven parser** that integrates seamlessly into event-driven architectures. Instead of blocking on I/O operations, it uses a **push model** where you feed bytes to the parser as they arrive from any source—network sockets, async file I/O, message queues, or any streaming data pipeline.
 
+![Event Pipeline Architecture](event-pipeline.svg)
+
 This design makes the parser ideal for:
 - **Non-blocking I/O** systems (NIO, async frameworks)
 - **Event-driven architectures** (reactive streams, actors)
@@ -70,7 +72,7 @@ public class AsyncJSONProcessor extends JSONDefaultHandler {
 
 This non-blocking approach means your application can:
 - Process JSON data as it arrives without waiting for complete documents
-- Integrate with async I/O frameworks (Netty, Vert.x, etc.)
+- Integrate with async I/O frameworks (Gumdrop, Netty, Vert.x, etc.)
 - Build reactive data pipelines where JSON parsing is a transformation stage
 - Handle multiple concurrent JSON streams without thread-per-connection
 
