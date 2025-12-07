@@ -21,128 +21,63 @@
 
 package org.bluezoo.json;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedReader;
-import java.io.EOFException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.IOException;
-import java.io.Reader;
-import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.CharBuffer;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
- * A JSON tokenizer. This follows the rules given in ECMA 404.
+ * A JSON tokenizer that operates on CharBuffer for streaming parsing.
+ * This follows the rules given in ECMA 404 / RFC 8259.
+ * <p>
+ * The tokenizer calls JSONContentHandler methods directly as tokens are recognized.
+ * Character data is provided via CharBuffer, allowing efficient extraction of
+ * string values using position/limit without intermediate copies.
  *
  * @author <a href='mailto:dog@gnu.org'>Chris Burdess</a>
  */
 class JSONTokenizer implements JSONLocator {
 
-    // The six structural tokens
-    private static final int LEFT_BRACKET = 0x5b;
-    private static final int LEFT_ACCOLADE = 0x7b;
-    private static final int RIGHT_BRACKET = 0x5d;
-    private static final int RIGHT_ACCOLADE = 0x7d;
-    private static final int COLON = 0x3a;
-    private static final int COMMA = 0x2c;
-
-    // Literal name tokens
-    private static final String TRUE = "true";
-    private static final String FALSE = "false";
-    private static final String NULL = "null";
-
-    // Quotes, whitespace etc
-    private static final int QUOTE = 0x22;
-    private static final int REVERSE_SOLIDUS = 0x5c;
-    private static final int SPACE = 0x20;
-    private static final int TAB = 0x209;
-    private static final int FF = 0x0c;
-    private static final int LF = 0x0a;
-    private static final int CR = 0x0d;
-
-    private static final Token TOKEN_TRUE = new BooleanToken(true);
-    private static final Token TOKEN_FALSE = new BooleanToken(false);
-    private static final Token TOKEN_NULL = new Token(Token.Type.NULL);
-    private static final Token TOKEN_COMMA = new Token(Token.Type.COMMA);
-    private static final Token TOKEN_COLON = new Token(Token.Type.COLON);
-    private static final Token TOKEN_EOF = new Token(Token.Type.EOF);
-    private static final Token TOKEN_START_OBJECT = new Token(Token.Type.START_OBJECT);
-    private static final Token TOKEN_END_OBJECT = new Token(Token.Type.END_OBJECT);
-    private static final Token TOKEN_START_ARRAY = new Token(Token.Type.START_ARRAY);
-    private static final Token TOKEN_END_ARRAY = new Token(Token.Type.END_ARRAY);
-
-    private final StringBuilder buf;
-    private final Reader in;
-
-    private int lineNumber = 1, columnNumber = 1;
-
-    private static final int[] UTF8_BOM = new int[] { 0xEF, 0xBB, 0xBF};
-    private static final int[] UTF16_BE_BOM = new int[] { 0xFE, 0xFF};
-    private static final int[] UTF16_LE_BOM = new int[] { 0xFF, 0xFE};
-    private static final int[] UTF32_BE_BOM = new int[] { 0x00, 0x00, 0xFE, 0xFF};
-    private static final int[] UTF32_LE_BOM = new int[] { 0xFF, 0xFE, 0x00, 0x00};
+    private final JSONContentHandler handler;
+    private StringBuilder escapeBuilder; // Lazily allocated for strings with escapes
+    private boolean needsWhitespace; // Whether handler needs whitespace events
+    
+    private int lineNumber = 1;
+    private int columnNumber = 0;
+    private boolean closed = false;
+    
+    // Track context for key vs value
+    private Deque<Context> contextStack = new ArrayDeque<>();
+    private State state = State.EXPECT_VALUE;  // Root level expects a value
+    
+    // Minimal parsing state for structural validation
+    Deque<Token> depthStack = new ArrayDeque<>();  // Track nesting depth
+    boolean seenAnyToken = false;  // Track if we've seen any non-whitespace token
+    boolean afterComma = false;  // Track if we just saw a comma
+    
+    private enum Context {
+        ARRAY, OBJECT
+    }
+    
+    private enum State {
+        EXPECT_VALUE,      // Expecting any value
+        EXPECT_KEY,        // Expecting a key (string in object)
+        EXPECT_COLON,      // Expecting colon after key
+        AFTER_VALUE        // After value, expecting comma or close bracket
+    }
 
     /**
-     * @param in the underlying input stream
-     * @param charset the stream's character set, if specified
+     * Creates a tokenizer with the given handler.
+     *
+     * @param handler the content handler to call with parsing events
      */
-    JSONTokenizer(InputStream in, String charset) throws IOException {
-        if (charset == null) {
-            // Determine the Unicode character set to use by looking at the
-            // first four bytes of the stream
-            if (!in.markSupported()) {
-                in = new BufferedInputStream(in);
-            }
-            in.mark(4);
-            int c0 = in.read();
-            int c1 = in.read();
-            int c2 = in.read();
-            int c3 = in.read();
-            in.reset();
-            // Check for byte order mark first
-            if (c0 == 0xef && c1 == 0xbb && c2 == 0xbf) { // UTF-8 BOM
-                in.read();
-                in.read();
-                in.read();
-                charset = "UTF-8";
-            } else if (c0 == 0 && c1 == 0 && c2 == 0xfe && c3 == 0xff) { // UTF-32BE BOM
-                in.read();
-                in.read();
-                in.read();
-                in.read();
-                charset = "UTF-32BE";
-            } else if (c0 == 0xff && c1 == 0xfe && c2 == 0 && c3 == 0) { // UTF-32LE BOM
-                in.read();
-                in.read();
-                in.read();
-                in.read();
-                charset = "UTF-32LE";
-            } else if (c0 == 0xfe && c1 == 0xff) { // UTF-16BE BOM
-                in.read();
-                in.read();
-                charset = "UTF-16BE";
-            } else if (c0 == 0xff && c1 == 0xfe) { // UTF-16LE BOM
-                in.read();
-                in.read();
-                charset = "UTF-16LE";
-            }
-            if (charset == null) { // autodetect algorithm
-                if (c0 == 0 && c1 == 0 && c2 == 0) {
-                    charset = "UTF-32BE";
-                } else if (c0 == 0 && c2 == 0) {
-                    charset = "UTF-16BE";
-                } else if (c1 == 0 && c2 == 0 && c3 == 0) {
-                    charset = "UTF-32LE";
-                } else if (c1 == 0 && c3 == 0) {
-                    charset = "UTF-16LE";
-                } else {
-                    charset = "UTF-8";
-                }
-            }
+    JSONTokenizer(JSONContentHandler handler) {
+        this.handler = handler;
+        
+        if (handler != null) {
+            handler.setLocator(this);
+            this.needsWhitespace = handler.needsWhitespace();
         }
-        Reader reader = new InputStreamReader(in, charset);
-        this.in = reader.markSupported() ? reader : new BufferedReader(reader); // need to mark
-        buf = new StringBuilder();
     }
 
     @Override
@@ -156,276 +91,823 @@ class JSONTokenizer implements JSONLocator {
     }
 
     /**
-     * Read the next token from the stream.
+     * Signal that the input stream is closed.
      */
-    Token nextToken() throws IOException, JSONException {
-        int c = in.read();
+    void setClosed(boolean closed) {
+        this.closed = closed;
+    }
+
+    boolean isClosed() {
+        return closed;
+    }
+
+    /**
+     * Process tokens from the CharBuffer, calling handler methods.
+     * Buffer must be in read mode (position at start, limit at end).
+     * Returns when buffer is exhausted or an incomplete token is encountered.
+     * Buffer position will be updated to reflect consumed characters.
+     */
+    void receive(CharBuffer data) throws JSONException {
+        while (data.hasRemaining()) {
+            // Save position for backtracking
+            int saveLineNumber = lineNumber;
+            int saveColumnNumber = columnNumber;
+            int startPos = data.position();
+            data.mark();
+            
+            char c = data.get();
+            
+            // Check if this is whitespace (which handles its own line/column tracking)
+            boolean isWhitespace = (c == ' ' || c == '\n' || c == '\t' || c == '\r');
+            
+            boolean processed = processToken(c, data);
+            
+            if (!processed) {
+                // Incomplete token - backtrack
+                data.reset();
+                lineNumber = saveLineNumber;
+                columnNumber = saveColumnNumber;
+                return;
+            }
+            
+            // Update column number based on characters consumed
+            // (but not for whitespace, which handles its own line/column tracking)
+            if (!isWhitespace) {
+                int charsConsumed = data.position() - startPos;
+                columnNumber += charsConsumed;
+            }
+        }
+    }
+
+    /**
+     * Process a single token starting with char c.
+     * Returns true if token was complete, false if need more data.
+     */
+    private boolean processToken(char c, CharBuffer data) throws JSONException {
         switch (c) {
-            case -1:
-                return TOKEN_EOF;
-            case QUOTE:
-                return consumeString();
-            case COMMA:
-                columnNumber++;
-                return TOKEN_COMMA;
-            case COLON:
-                columnNumber++;
-                return TOKEN_COLON;
-            case LEFT_ACCOLADE:
-                columnNumber++;
-                return TOKEN_START_OBJECT;
-            case RIGHT_ACCOLADE:
-                columnNumber++;
-                return TOKEN_END_OBJECT;
-            case LEFT_BRACKET:
-                columnNumber++;
-                return TOKEN_START_ARRAY;
-            case RIGHT_BRACKET:
-                columnNumber++;
-                return TOKEN_END_ARRAY;
-            case SPACE:
-            case LF:
-            case TAB:
-            case FF:
-            case CR:
-                return consumeWhitespace(c);
-            case 0x74: // t
-                int t2 = in.read(), t3 = in.read(), t4 = in.read();
-                if (t2 == 0x72 && t3 == 0x75 && t4 == 0x65) { // true
-                    columnNumber += 4;
-                    return TOKEN_TRUE;
-                } else {
-                    throw new JSONException("Unexpected characters");
+            case '"':
+                // String can be a key or a value
+                if (state == State.EXPECT_COLON || state == State.AFTER_VALUE) {
+                    throw new JSONException("Unexpected string");
                 }
-            case 0x66: // f
-                int f2 = in.read(), f3 = in.read(), f4 = in.read(), f5 = in.read();
-                if (f2 == 0x61 && f3 == 0x6c && f4 == 0x73 && f5 == 0x65) { // false
-                    columnNumber += 5;
-                    return TOKEN_FALSE;
-                } else {
-                    throw new JSONException("Unexpected characters");
+                boolean isKey = (state == State.EXPECT_KEY);
+                if (!processString(data, isKey)) {
+                    return false;
                 }
-            case 0x6e: // n
-                int n2 = in.read(), n3 = in.read(), n4 = in.read();
-                if (n2 == 0x75 && n3 == 0x6c && n4 == 0x6c) { // null
-                    columnNumber += 4;
-                    return TOKEN_NULL;
+                seenAnyToken = true;
+                afterComma = false;
+                if (isKey) {
+                    state = State.EXPECT_COLON;
                 } else {
-                    throw new JSONException("Unexpected characters");
+                    state = State.AFTER_VALUE;
                 }
+                return true;
+                
+            case ',':
+                if (state != State.AFTER_VALUE) {
+                    throw new JSONException("Unexpected ','");
+                }
+                if (contextStack.isEmpty()) {
+                    throw new JSONException("Unexpected comma at root level");
+                }
+                seenAnyToken = true;
+                afterComma = true;
+                // After comma: expect key in object, value in array
+                state = (contextStack.peek() == Context.OBJECT) ? State.EXPECT_KEY : State.EXPECT_VALUE;
+                return true;
+                
+            case ':':
+                if (state != State.EXPECT_COLON) {
+                    throw new JSONException("Unexpected ':'");
+                }
+                seenAnyToken = true;
+                afterComma = false;
+                state = State.EXPECT_VALUE;
+                return true;
+                
+            case '{':
+                if (state != State.EXPECT_VALUE) {
+                    throw new JSONException("Unexpected '{'");
+                }
+                handler.startObject();
+                contextStack.push(Context.OBJECT);
+                depthStack.push(Token.START_OBJECT);
+                seenAnyToken = true;
+                afterComma = false;
+                state = State.EXPECT_KEY;  // Objects start expecting key (or '}')
+                return true;
+                
+            case '}':
+                if (contextStack.isEmpty() || contextStack.peek() != Context.OBJECT) {
+                    throw new JSONException("Unexpected '}'");
+                }
+                // Can close empty object (EXPECT_KEY) or after a value (AFTER_VALUE)
+                if (state != State.EXPECT_KEY && state != State.AFTER_VALUE) {
+                    throw new JSONException("Unexpected '}'");
+                }
+                // Cannot close after comma
+                if (afterComma) {
+                    throw new JSONException("Trailing comma before '}'");
+                }
+                handler.endObject();
+                contextStack.pop();
+                depthStack.pop();
+                seenAnyToken = true;
+                afterComma = false;
+                state = contextStack.isEmpty() ? State.AFTER_VALUE : State.AFTER_VALUE;
+                return true;
+                
+            case '[':
+                if (state != State.EXPECT_VALUE) {
+                    throw new JSONException("Unexpected '['");
+                }
+                handler.startArray();
+                contextStack.push(Context.ARRAY);
+                depthStack.push(Token.START_ARRAY);
+                seenAnyToken = true;
+                afterComma = false;
+                state = State.EXPECT_VALUE;  // Arrays start expecting value (or ']')
+                return true;
+                
+            case ']':
+                if (contextStack.isEmpty() || contextStack.peek() != Context.ARRAY) {
+                    throw new JSONException("Unexpected ']'");
+                }
+                // Can close empty array (EXPECT_VALUE) or after a value (AFTER_VALUE)
+                if (state != State.EXPECT_VALUE && state != State.AFTER_VALUE) {
+                    throw new JSONException("Unexpected ']'");
+                }
+                // Cannot close after comma
+                if (afterComma) {
+                    throw new JSONException("Trailing comma before ']'");
+                }
+                handler.endArray();
+                contextStack.pop();
+                depthStack.pop();
+                seenAnyToken = true;
+                afterComma = false;
+                state = contextStack.isEmpty() ? State.AFTER_VALUE : State.AFTER_VALUE;
+                return true;
+                
+            case ' ':
+            case '\n':
+            case '\t':
+            case '\r':
+                return processWhitespace(c, data);
+                
+            case 't': // true
+                if (state != State.EXPECT_VALUE) {
+                    throw new JSONException("Unexpected 'true'");
+                }
+                if (!processLiteral(data, "rue", true)) {
+                    return false;
+                }
+                seenAnyToken = true;
+                afterComma = false;
+                state = State.AFTER_VALUE;
+                return true;
+                
+            case 'f': // false
+                if (state != State.EXPECT_VALUE) {
+                    throw new JSONException("Unexpected 'false'");
+                }
+                if (!processLiteral(data, "alse", false)) {
+                    return false;
+                }
+                seenAnyToken = true;
+                afterComma = false;
+                state = State.AFTER_VALUE;
+                return true;
+                
+            case 'n': // null
+                if (state != State.EXPECT_VALUE) {
+                    throw new JSONException("Unexpected 'null'");
+                }
+                if (!processLiteral(data, "ull", null)) {
+                    return false;
+                }
+                seenAnyToken = true;
+                afterComma = false;
+                state = State.AFTER_VALUE;
+                return true;
+                
             default:
                 // number
-                return consumeNumber(c);
-        }
-    }
-
-    StringToken consumeString() throws IOException, JSONException {
-        columnNumber++; // "
-        buf.setLength(0); // reset buf
-        int c = in.read();
-        while (c != QUOTE) {
-            switch (c) {
-                case -1:
-                    throw new EOFException("Unexpected EOF in string value");
-                case REVERSE_SOLIDUS:
-                    buf.append(consumeEscapeSequence());
-                    break;
-                default:
-                    if (c <= 0x1f) {
-                        throw new EOFException("Unescaped control character in string value");
+                if (c == '-' || (c >= '0' && c <= '9')) {
+                    if (state != State.EXPECT_VALUE) {
+                        throw new JSONException("Unexpected number");
                     }
-                    columnNumber++;
-                    buf.append((char) c);
-            }
-            c = in.read();
-        }
-        columnNumber++; // "
-        return new StringToken(buf.toString());
-    }
-
-    char consumeEscapeSequence() throws IOException, JSONException {
-        columnNumber++; // \
-        int c = in.read();
-        switch (c) {
-            case -1:
-                throw new EOFException("Unexpected EOF in escape sequence");
-            case QUOTE:
-                columnNumber++;
-                return '"';
-            case REVERSE_SOLIDUS:
-                columnNumber++;
-                return '\\';
-            case 0x2f: // SOLIDUS
-                columnNumber++;
-                return '/';
-            case 0x62: // b
-                columnNumber++;
-                return '\b';
-            case 0x66: // f
-                columnNumber++;
-                return '\f';
-            case 0x6e: // n
-                columnNumber++;
-                return '\n';
-            case 0x72: // r
-                columnNumber++;
-                return '\r';
-            case 0x74: // t
-                columnNumber++;
-                return '\t';
-            case 0x75: // u
-                columnNumber++;
-                return consumeHexadecimalEscapeSequence();
-            default:
-                throw new JSONException("Unexpected character 0x"+Integer.toHexString(c)+" in escape sequence");
-        }
-    }
-
-    char consumeHexadecimalEscapeSequence() throws IOException, JSONException {
-        // four hexadecimal digits
-        int d1 = unhex(in.read());
-        columnNumber++;
-        int d2 = unhex(in.read());
-        columnNumber++;
-        int d3 = unhex(in.read());
-        columnNumber++;
-        int d4 = unhex(in.read());
-        columnNumber++;
-        int ret = d4 | (d3 << 4) | (d2 << 8) | (d1 << 12);
-        return (char) ret;
-    }
-
-    int unhex(int c) throws JSONException {
-        if (c >= 0x30 && c <= 0x39) { // 0-9
-            return c - 0x30;
-        } else if (c >= 0x41 && c <= 0x46) { // A-F
-            return c - 0x37;
-        } else if (c >= 0x61 && c <= 0x66) { // a-f
-            return c - 0x57;
-        }
-        throw new JSONException("Unexpected character in hexadecimal digit");
-    }
-
-    WhitespaceToken consumeWhitespace(int c) throws IOException, JSONException {
-        buf.setLength(0);
-        int last = -1;
-        while (true) {
-            if (c == LF) {
-                if (last != CR) { // Collapse CRLF into one line ending
-                    lineNumber++;
-                    columnNumber = 1;
+                    if (!processNumber(c, data)) {
+                        return false;
+                    }
+                    seenAnyToken = true;
+                    afterComma = false;
+                    state = State.AFTER_VALUE;
+                    return true;
                 }
-                buf.append((char) c);
-                last = c;
-            } else if (c == CR) {
-                lineNumber++;
-                columnNumber = 1;
-                buf.append((char) c);
-                last = c;
-            } else if (c == SPACE || c == TAB) {
-                columnNumber++;
-                buf.append((char) c);
-                last = c;
-            } else {
-                in.reset();
-                columnNumber--;
-                return new WhitespaceToken(buf.toString());
-            }
-            in.mark(1);
-            c = in.read();
+                throw new JSONException("Unexpected character: " + c);
         }
     }
 
-    NumberToken consumeNumber(int c) throws IOException, JSONException {
-        buf.setLength(0); // reset
-        boolean negativeNumber = (c == 0x2d); // -
-        long number = 0L;
-        if (negativeNumber) {
-            columnNumber++;
-            buf.append((char) c);
-            c = in.read();
-        }
-        if (c == 0x30) { // 0
-            buf.append((char) c);
-            columnNumber++;
-            in.mark(1);
-            c = in.read();
-        } else if (c >= 0x31 && c <= 0x39) { // 1-9
-            do {
-                columnNumber++;
-                buf.append((char) c);
-                in.mark(1);
-                c = in.read();
-            } while (c >= 0x30 && c <= 0x39); // 0-9
-        } else {
-            throw new JSONException("Invalid character in number value: 0x"+Integer.toHexString(c));
-        }
-        // number part complete
-        // Expecting: .|e|E|EOF
-        if (c == -1 || (c != 0x2e && c != 0x65 && c != 0x45)) { // integer
-            in.reset();
-            try {
-                long l = Long.parseLong(buf.toString());
-                if (l >= (long) Integer.MIN_VALUE && l <= (long) Integer.MAX_VALUE) {
-                    // Store it as an integer to reduce memory cost
-                    return new NumberToken(Integer.valueOf((int) l));
+    /**
+     * Process a string token.
+     * Opening quote already consumed.
+     */
+    private boolean processString(CharBuffer data, boolean isKey) throws JSONException {
+        // We'll use direct extraction for strings without escapes
+        // Once we hit an escape, we'll switch to StringBuilder
+        int startPos = data.position();
+        StringBuilder builder = null;
+        
+        while (data.hasRemaining()) {
+            char c = data.get();
+            
+            if (c == '"') {
+                // Complete string - extract value
+                String value;
+                if (builder != null) {
+                    // Had escapes - use builder
+                    value = builder.toString();
                 } else {
-                    return new NumberToken(Long.valueOf(l));
+                    // No escapes - extract directly from CharBuffer
+                    int endPos = data.position() - 1; // Before closing quote
+                    if (endPos > startPos) {
+                        // Save current state
+                        int savedPos = data.position();
+                        int savedLimit = data.limit();
+                        // Extract substring
+                        data.limit(endPos).position(startPos);
+                        value = data.toString();
+                        // Restore state
+                        data.limit(savedLimit).position(savedPos);
+                    } else {
+                        // Empty string
+                        value = "";
+                    }
                 }
-            } catch (NumberFormatException e) {
-                // Could be too large. Try BigInteger
-                return new NumberToken(new BigInteger(buf.toString()));
-            }
-        }
-        boolean hasFractionalPart = (c == 0x2e); // .
-        long fractionalPart = 0L;
-        if (hasFractionalPart) {
-            columnNumber++;
-            buf.append((char) c);
-            c = in.read();
-            if (c >= 0x30 && c <= 0x39) { // 0-9
-                do {
-                    columnNumber++;
-                    buf.append((char) c);
-                    in.mark(1);
-                    c = in.read();
-                } while (c >= 0x30 && c <= 0x39); // 0-9
+                
+                // Call appropriate handler method
+                if (isKey) {
+                    handler.key(value);
+                } else {
+                    handler.stringValue(value);
+                }
+                return true;
+            } else if (c == '\\') {
+                // Hit an escape - need to use StringBuilder from now on
+                if (builder == null) {
+                    // Allocate builder with smart capacity management
+                    if (escapeBuilder == null) {
+                        escapeBuilder = new StringBuilder(256);
+                    } else if (escapeBuilder.capacity() > 16384) {
+                        // StringBuilder grew too large, reallocate to avoid keeping large buffer
+                        escapeBuilder = new StringBuilder(256);
+                    } else {
+                        escapeBuilder.setLength(0);
+                    }
+                    builder = escapeBuilder;
+                    
+                    // Copy any characters read so far (before this backslash)
+                    int endPos = data.position() - 1; // Position of backslash
+                    if (endPos > startPos) {
+                        int savedPos = data.position();
+                        int savedLimit = data.limit();
+                        data.limit(endPos).position(startPos);
+                        builder.append(data);
+                        data.limit(savedLimit).position(savedPos);
+                    }
+                }
+                
+                // Process escape sequence
+                Character escaped = processEscapeSequence(data);
+                if (escaped == null) {
+                    return false; // Need more data
+                }
+                builder.append(escaped);
+            } else if (c < 0x20) {
+                throw new JSONException("Unescaped control character in string");
             } else {
-                throw new JSONException("Invalid character in number value: 0x"+Integer.toHexString(c));
+                // Regular character
+                if (builder != null) {
+                    // Already building - append
+                    builder.append(c);
+                }
+                // Otherwise will be extracted from buffer later
             }
-            // fractional part complete
         }
-        // Expecting: e|E
-        boolean hasExponent = (c == 0x65 || c == 0x45);
-        long exponent = 0L;
-        if (hasExponent) {
-            columnNumber++;
-            buf.append((char) c); // E|e
-            c = in.read();
-            boolean negativeExponent = (c == 0x2d); // -
-            if (negativeExponent || c == 0x2b) { // +
-                columnNumber++;
-                buf.append((char) c);
-                c = in.read();
-            }
-            if (c >= 0x30 && c <= 0x39) { // 0-9
-                do {
-                    columnNumber++;
-                    buf.append((char) c);
-                    in.mark(1);
-                    c = in.read();
-                } while (c >= 0x30 && c <= 0x39); // 0-9
-            } else {
-                throw new JSONException("Invalid character in number value: 0x"+Integer.toHexString(c));
-            }
-            // exponent part complete
+        
+        // Ran out of buffer
+        if (!closed) {
+            return false; // Need more data
         }
-        in.reset();
-        try {
-            return new NumberToken(Double.valueOf(buf.toString()));
-        } catch (NumberFormatException e) {
-            return new NumberToken(new BigDecimal(buf.toString()));
+        
+        throw new JSONException("Unclosed string");
+    }
+
+    /**
+     * Process an escape sequence.
+     * Backslash already consumed.
+     */
+    private Character processEscapeSequence(CharBuffer data) throws JSONException {
+        if (!data.hasRemaining()) {
+            if (!closed) {
+                return null; // Need more data
+            }
+            throw new JSONException("Unexpected EOF in escape sequence");
+        }
+        
+        char c = data.get();
+        
+        switch (c) {
+            case '"':
+                return '"';
+            case '\\':
+                return '\\';
+            case '/':
+                return '/';
+            case 'b':
+                return '\b';
+            case 'f':
+                return '\f';
+            case 'n':
+                return '\n';
+            case 'r':
+                return '\r';
+            case 't':
+                return '\t';
+            case 'u':
+                return processUnicodeEscape(data);
+            default:
+                throw new JSONException("Invalid escape sequence: \\" + c);
         }
     }
 
+    /**
+     * Process a Unicode escape sequence \\uXXXX.
+     * The \\u already consumed.
+     */
+    private Character processUnicodeEscape(CharBuffer data) throws JSONException {
+        int value = 0;
+        
+        for (int i = 0; i < 4; i++) {
+            if (!data.hasRemaining()) {
+                if (!closed) {
+                    return null; // Need more data
+                }
+                throw new JSONException("Incomplete Unicode escape");
+            }
+            
+            char c = data.get();
+            
+            int digit = unhex(c);
+            value = (value << 4) | digit;
+        }
+        
+        return (char) value;
+    }
+
+    /**
+     * Convert a hex digit to its numeric value.
+     */
+    private int unhex(char c) throws JSONException {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        } else if (c >= 'A' && c <= 'F') {
+            return c - 'A' + 10;
+        } else if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+        throw new JSONException("Invalid hex digit: " + c);
+    }
+
+    /**
+     * Process whitespace starting with first char.
+     */
+    private boolean processWhitespace(char first, CharBuffer data) throws JSONException {
+        // Update line/column for first character
+        if (first == '\n') {
+            lineNumber++;
+            columnNumber = 0;
+        } else if (first == '\r') {
+            lineNumber++;
+            columnNumber = 0;
+        }
+        
+        if (!needsWhitespace) {
+            // Handler doesn't need whitespace - just consume it
+            while (data.hasRemaining()) {
+                int savedPos = data.position();
+                char c = data.get();
+                
+                if (c == ' ' || c == '\t') {
+                    columnNumber++;
+                } else if (c == '\n') {
+                    lineNumber++;
+                    columnNumber = 0;
+                } else if (c == '\r') {
+                    lineNumber++;
+                    columnNumber = 0;
+                } else {
+                    // Not whitespace - backtrack
+                    data.position(savedPos);
+                    break;
+                }
+            }
+            return true;
+        }
+        
+        // Handler needs whitespace - extract string
+        int startPos = data.position() - 1; // Before first char
+        
+        while (data.hasRemaining()) {
+            int savedPos = data.position();
+            char c = data.get();
+            
+            if (c == ' ' || c == '\t') {
+                columnNumber++;
+            } else if (c == '\n') {
+                lineNumber++;
+                columnNumber = 0;
+            } else if (c == '\r') {
+                lineNumber++;
+                columnNumber = 0;
+            } else {
+                // Not whitespace - backtrack
+                data.position(savedPos);
+                break;
+            }
+        }
+        
+        // Extract whitespace string from CharBuffer
+        int endPos = data.position();
+        int savedPos = data.position();
+        int savedLimit = data.limit();
+        data.limit(endPos).position(startPos);
+        String ws = data.toString();
+        data.limit(savedLimit).position(savedPos);
+        
+        handler.whitespace(ws);
+        return true;
+    }
+
+    /**
+     * Process a literal (true, false, null).
+     * First character already consumed, remaining contains rest of literal.
+     */
+    private boolean processLiteral(CharBuffer data, String remaining, Boolean boolValue) throws JSONException {
+        // First character already consumed and counted
+        for (int i = 0; i < remaining.length(); i++) {
+            if (!data.hasRemaining()) {
+                if (!closed) {
+                    return false; // Need more data
+                }
+                throw new JSONException("Incomplete literal");
+            }
+            
+            char c = data.get();
+            if (c != remaining.charAt(i)) {
+                throw new JSONException("Invalid literal");
+            }
+        }
+        
+        // Call appropriate handler method
+        if (boolValue != null) {
+            handler.booleanValue(boolValue);
+        } else {
+            handler.nullValue();
+        }
+        return true;
+    }
+
+    /**
+     * Process a number token.
+     * First character already consumed.
+     * DO NOT call mark() - the mark is set by receive() at the start of the token.
+     */
+    private boolean processNumber(char first, CharBuffer data) throws JSONException {
+        int startPos = data.position() - 1; // Before first char
+        
+        boolean negativeNumber = (first == '-');
+        
+        if (negativeNumber) {
+            if (!data.hasRemaining()) {
+                if (!closed) {
+                    return false; // Need more data
+                }
+                throw new JSONException("Invalid number: just '-'");
+            }
+            first = data.get();
+        }
+        
+        // Integer part
+        if (first == '0') {
+            // After 0, next must not be a digit (no leading zeros)
+            if (data.hasRemaining()) {
+                int savedPos = data.position();
+                char next = data.get();
+                if (next >= '0' && next <= '9') {
+                    throw new JSONException("Numbers cannot have leading zeros");
+                }
+                // Backtrack - we'll re-read for fractional/exponent check
+                data.position(savedPos);
+            } else if (!closed) {
+                return false; // Might be 0.5 coming
+            }
+        } else if (first >= '1' && first <= '9') {
+            // Consume remaining digits
+            boolean sawNonDigit = false;
+            while (data.hasRemaining()) {
+                int savedPos = data.position();
+                char c = data.get();
+                if (c >= '0' && c <= '9') {
+                    // Continue
+                } else {
+                    // Non-digit - backtrack
+                    data.position(savedPos);
+                    sawNonDigit = true;
+                    break;
+                }
+            }
+            
+            if (!sawNonDigit && !closed) {
+                return false; // Might be more digits or . or e coming
+            }
+        } else {
+            throw new JSONException("Invalid number format");
+        }
+        
+        // Optional fractional part
+        if (data.hasRemaining()) {
+            int savedPos = data.position();
+            char c = data.get();
+            if (c == '.') {
+                
+                // Must have at least one digit after decimal
+                if (!data.hasRemaining()) {
+                    if (!closed) {
+                        return false;
+                    }
+                    throw new JSONException("Decimal point must be followed by digit");
+                }
+                
+                char digit = data.get();
+                if (digit < '0' || digit > '9') {
+                    throw new JSONException("Decimal point must be followed by digit");
+                }
+                
+                // Consume remaining fractional digits
+                while (data.hasRemaining()) {
+                    int pos = data.position();
+                    char d = data.get();
+                    if (d >= '0' && d <= '9') {
+                        // Continue
+                    } else {
+                        data.position(pos);
+                        break;
+                    }
+                }
+                
+                // After decimal digits, check for exponent
+                if (!data.hasRemaining()) {
+                    if (!closed) {
+                        return false; // Might be 'e' coming
+                    }
+                    // No exponent, number is complete - fall through to end
+                } else {
+                    // Peek at next character for exponent
+                    savedPos = data.position();
+                    c = data.get();
+                    
+                    // Check for exponent
+                    if (c == 'e' || c == 'E') {
+                        
+                        if (!data.hasRemaining()) {
+                            if (!closed) {
+                                return false;
+                            }
+                            throw new JSONException("Incomplete exponent");
+                        }
+                        
+                        char sign = data.get();
+                        if (sign == '+' || sign == '-') {
+                            
+                            if (!data.hasRemaining()) {
+                                if (!closed) {
+                                    return false;
+                                }
+                                throw new JSONException("Exponent must have digit");
+                            }
+                            sign = data.get();
+                        }
+                        
+                        // Must have at least one digit
+                        if (sign < '0' || sign > '9') {
+                            throw new JSONException("Exponent must have digit");
+                        }
+                        
+                        // Consume remaining exponent digits
+                        while (data.hasRemaining()) {
+                            int pos = data.position();
+                            char d = data.get();
+                            if (d >= '0' && d <= '9') {
+                                // Continue
+                            } else {
+                                data.position(pos);
+                                break;
+                            }
+                        }
+                        
+                        if (!data.hasRemaining() && !closed) {
+                            return false; // Might be more digits
+                        }
+                    } else {
+                        // Not exponent - backtrack
+                        data.position(savedPos);
+                    }
+                }
+            } else {
+                // Not decimal point - backtrack
+                data.position(savedPos);
+                
+                // Check for exponent (without decimal)
+                if (c == 'e' || c == 'E') {
+                    // Consume the 'e'/'E' that we peeked at
+                    data.get();
+                    
+                    if (!data.hasRemaining()) {
+                        if (!closed) {
+                            return false;
+                        }
+                        throw new JSONException("Incomplete exponent");
+                    }
+                    
+                    char sign = data.get();
+                    if (sign == '+' || sign == '-') {
+                        
+                        if (!data.hasRemaining()) {
+                            if (!closed) {
+                                return false;
+                            }
+                            throw new JSONException("Exponent must have digit");
+                        }
+                        sign = data.get();
+                    }
+                    
+                    // Must have at least one digit
+                    if (sign < '0' || sign > '9') {
+                        throw new JSONException("Exponent must have digit");
+                    }
+                    
+                    // Consume remaining exponent digits
+                    while (data.hasRemaining()) {
+                        int pos = data.position();
+                        char d = data.get();
+                        if (d >= '0' && d <= '9') {
+                            // Continue
+                        } else {
+                            data.position(pos);
+                            break;
+                        }
+                    }
+                    
+                    if (!data.hasRemaining() && !closed) {
+                        return false; // Might be more digits
+                    }
+                }
+                // else: not decimal or exponent, number is complete as integer
+            }
+        } else if (!closed) {
+            return false; // Might be . or e coming
+        }
+        
+        // Extract and parse number
+        Number num = parseNumberDirect(data, startPos, negativeNumber);
+        handler.numberValue(num);
+        return true;
+    }
+
+    /**
+     * Extract string from CharBuffer between startPos and current position.
+     */
+    private String extractString(CharBuffer data, int startPos) {
+        int endPos = data.position();
+        int savedPos = data.position();
+        int savedLimit = data.limit();
+        data.position(startPos).limit(endPos);
+        String result = data.toString();
+        data.position(savedPos).limit(savedLimit);
+        return result;
+    }
+
+    /**
+     * Parse a number directly from CharBuffer without creating intermediate String.
+     * Falls back to String-based parsing for very large integers or floating point.
+     */
+    private Number parseNumberDirect(CharBuffer data, int startPos, boolean negative) throws JSONException {
+        int endPos = data.position();
+        int length = endPos - startPos;
+        
+        // Check if it contains decimal point or exponent
+        boolean hasDecimalOrExponent = false;
+        for (int i = startPos; i < endPos; i++) {
+            char c = data.get(i);
+            if (c == '.' || c == 'e' || c == 'E') {
+                hasDecimalOrExponent = true;
+                break;
+            }
+        }
+        
+        if (hasDecimalOrExponent) {
+            // Floating point or scientific notation - use String parsing
+            String numStr = extractString(data, startPos);
+            try {
+                return Double.valueOf(numStr);
+            } catch (NumberFormatException e) {
+                throw new JSONException("Invalid number: " + numStr, e);
+            }
+        }
+        
+        // Integer - try to parse directly
+        // Fast path for integers that fit in long (most common case)
+        if (length <= 19) { // Max long is 19 digits
+            try {
+                long value = 0;
+                int pos = startPos;
+                
+                // Skip negative sign if present (already tracked)
+                if (data.get(pos) == '-') {
+                    pos++;
+                }
+                
+                // Parse digits
+                while (pos < endPos) {
+                    char c = data.get(pos);
+                    if (c < '0' || c > '9') {
+                        throw new JSONException("Invalid number character: " + c);
+                    }
+                    
+                    int digit = c - '0';
+                    
+                    // Check for overflow
+                    if (value > (Long.MAX_VALUE - digit) / 10) {
+                        // Would overflow, fall back to BigInteger
+                        String numStr = extractString(data, startPos);
+                        return new BigInteger(numStr);
+                    }
+                    
+                    value = value * 10 + digit;
+                    pos++;
+                }
+                
+                if (negative) {
+                    value = -value;
+                }
+                
+                // Return Integer if it fits, otherwise Long
+                if (value >= Integer.MIN_VALUE && value <= Integer.MAX_VALUE) {
+                    return Integer.valueOf((int) value);
+                }
+                return Long.valueOf(value);
+                
+            } catch (JSONException e) {
+                throw e;
+            } catch (Exception e) {
+                // Unexpected error, fall back to String parsing
+                String numStr = extractString(data, startPos);
+                throw new JSONException("Invalid number: " + numStr, e);
+            }
+        } else {
+            // Very large integer - use BigInteger via String
+            String numStr = extractString(data, startPos);
+            try {
+                return new BigInteger(numStr);
+            } catch (NumberFormatException e) {
+                throw new JSONException("Invalid number: " + numStr, e);
+            }
+        }
+    }
+
+    /**
+     * Parse a number string into appropriate Number type.
+     * This method is now deprecated in favor of parseNumberDirect.
+     */
+    private Number parseNumber(String s) throws JSONException {
+        try {
+            if (s.contains(".") || s.contains("e") || s.contains("E")) {
+                return Double.valueOf(s);
+            } else {
+                try {
+                    long l = Long.parseLong(s);
+                    if (l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) {
+                        return Integer.valueOf((int) l);
+                    }
+                    return Long.valueOf(l);
+                } catch (NumberFormatException e) {
+                    return new BigInteger(s);
+                }
+            }
+        } catch (NumberFormatException e) {
+            throw new JSONException("Invalid number: " + s, e);
+        }
+    }
 }

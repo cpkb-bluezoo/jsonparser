@@ -8,6 +8,13 @@
   <property name="lib" location="lib"/>
   <property name="doc" location="doc"/>
   <property name="release" value="1.1.0"/>
+  <property name="test" location="test"/>
+  <property name="java.source.version" value="1.8"/>
+  <property name="java.target.version" value="1.8"/>
+
+  <!-- JUnit dependencies -->
+  <property name='junit.jar' value='junit-4.13.1.jar'/>
+  <property name='hamcrest.jar' value='hamcrest-3.0.jar'/>
 
   <target name="init">
     <tstamp/>
@@ -15,7 +22,8 @@
   </target>
 
   <target name="build" depends="init">
-    <javac debug="true" srcdir="${src}" destdir="${build}">
+    <javac debug="true" srcdir="${src}" destdir="${build}"
+           source="${java.source.version}" target="${java.target.version}">
     </javac>
   </target>
 
@@ -38,6 +46,47 @@
     <delete dir="${build}"/>
     <delete dir="${dist}"/>
     <delete dir="${doc}"/>
+  </target>
+
+  <target name='clean-junit'>
+    <delete dir='${test}/junit/classes'/>
+    <delete dir='${test}/junit/results'/>
+  </target>
+
+  <target name='junit-build' depends='build'>
+    <mkdir dir='${test}/junit/classes'/>
+    <javac srcdir='${test}/junit/src' destdir='${test}/junit/classes' debug='true'
+           source='${java.source.version}' target='${java.target.version}'
+           includeantruntime='false'>
+      <classpath>
+        <pathelement location='${test}/junit/lib/${junit.jar}'/>
+        <pathelement location='${build}'/>
+      </classpath>
+    </javac>
+    <copy todir='${test}/junit/classes'>
+      <fileset dir='${test}/junit/src'>
+        <include name='**/*.eml'/>
+      </fileset>
+    </copy>
+  </target>
+
+  <target name='junit-test' depends='junit-build'>
+    <mkdir dir='${test}/junit/results'/>
+    <junit printsummary='yes' haltonfailure='no'>
+      <classpath>
+        <pathelement location='${test}/junit/classes'/>
+        <pathelement location='${test}/junit/lib/${junit.jar}'/>
+        <pathelement location='${test}/junit/lib/${hamcrest.jar}'/>
+        <pathelement location='${build}'/>
+      </classpath>
+      <batchtest fork="yes" todir="${test}/junit/results">
+        <fileset dir="${test}/junit/src">
+          <include name="**/*Test.java" />
+        </fileset>
+      </batchtest>
+      <formatter type="plain" />
+      <!--formatter type="xml" /-->
+    </junit>
   </target>
 
 </project>
