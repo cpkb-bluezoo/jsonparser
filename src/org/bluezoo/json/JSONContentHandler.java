@@ -121,4 +121,18 @@ public interface JSONContentHandler {
      */
     public void setLocator(JSONLocator locator);
 
+    /**
+     * Indicates whether this handler needs to receive whitespace events.
+     * By default, handlers do not need whitespace, which allows the parser
+     * to skip expensive string extraction for whitespace sequences.
+     * Implementations that need whitespace (e.g., for pretty-printing or
+     * preserving exact formatting) should override this to return true.
+     * 
+     * @return true if this handler wants {@link #whitespace(String)} to be
+     *         called, false otherwise (default)
+     */
+    default boolean needsWhitespace() {
+        return false;
+    }
+
 }

@@ -1,11 +1,13 @@
 # jsonparser
 JSON parser and serializer for Java
 
-This is a tiny and efficient JSON parser and serialization library for Java.
-It takes up only 30KB, as opposed to object-mapping-based JSON parsers such as
-Apache Jackson (600KB), and is fast and conformant.
+This is a tiny and efficient JSON parser and serialization library for
+Java. It takes up only 26KB (including the serialisation feature), as
+opposed to object-mapping-based JSON parsers such as GSON (290KB) or
+Jackson (600KB), and is fast and conformant.
 
-Full JavaDoc documentation is included in the package, see the doc subdirectory.
+Full JavaDoc documentation is included in the package, see the doc
+subdirectory.
 
 **[View API documentation online](https://cpkb-bluezoo.github.io/jsonparser/doc/)
 
@@ -13,7 +15,12 @@ Full JavaDoc documentation is included in the package, see the doc subdirectory.
 
 ### Asynchronous, Non-Blocking API (Primary)
 
-The `JSONParser` is designed as an **asynchronous-first, non-blocking, data-driven parser** that integrates seamlessly into event-driven architectures. Instead of blocking on I/O operations, it uses a **push model** where you feed bytes to the parser as they arrive from any source—network sockets, async file I/O, message queues, or any streaming data pipeline.
+The `JSONParser` is designed as an **asynchronous-first, non-blocking,
+data-driven parser** that integrates seamlessly into event-driven
+architectures. Instead of blocking on I/O operations, it uses a **push
+model** where you feed bytes to the parser as they arrive from any
+source — network sockets, async file I/O, message queues, or any
+streaming data pipeline.
 
 ![Event Pipeline Architecture](event-pipeline.svg)
 
@@ -24,19 +31,23 @@ This design makes the parser ideal for:
 - **Data pipeline architectures** where JSON transformation is one stage
 
 Traditional object-mapping based JSON parsers such as GSON or Jasper, in
-contrast, are **blocking** - your application thread has to block while it
-processes the entire message. If the message hasn't been completely
+contrast, are **blocking** - your application thread has to block while
+it processes the entire message. If the message hasn't been completely
 delivered yet, your entire process has to wait. Then when it finally
 produces the parse result, that result is an object taking up memory
 proportional to the size of the JSON message. With an event-based parser,
 you have as little memory overhead as you want: you decide how large the
-chunks are, there is no memory overhead beyond that and JSON semantic events
-are ready to process before the parse is complete and even before the
-message has finished arriving over the network: near-zero latency.
+chunks are, there is no memory overhead beyond that and JSON semantic
+events are ready to process before the parse is complete and even before
+the message has finished arriving over the network: near-zero latency.
 
 #### How It Works
 
-The parser maintains internal state between calls, buffering incomplete tokens and emitting parsing events via the SAX-like `JSONContentHandler` interface as soon as complete tokens are recognized. This allows it to operate as a **streaming transformer** in a data pipeline, converting raw byte chunks into semantic JSON events.
+The parser maintains internal state between calls, buffering incomplete
+tokens and emitting parsing events via the SAX-like `JSONContentHandler`
+interface as soon as complete tokens are recognized. This allows it to
+operate as a **streaming transformer** in a data pipeline, converting raw
+byte chunks into semantic JSON events.
 
 **Core Methods:**
 - `receive(ByteBuffer data)` - Push a chunk of bytes into the parser
@@ -84,12 +95,16 @@ public class AsyncJSONProcessor extends JSONDefaultHandler {
 This non-blocking approach means your application can:
 - Process JSON data as it arrives without waiting for complete documents
 - Integrate with async I/O frameworks (Gumdrop, Netty, Vert.x, etc.)
-- Build reactive data pipelines where JSON parsing is a transformation stage
+- Build reactive data pipelines where JSON parsing is a transformation
+  stage
 - Handle multiple concurrent JSON streams without thread-per-connection
 
 ### Traditional Blocking API (Convenience)
 
-For simpler use cases where blocking I/O is acceptable, a traditional `parse(InputStream)` method is provided as a convenience wrapper. It internally delegates to the streaming API by reading the stream in chunks.
+For simpler use cases where blocking I/O is acceptable, a traditional
+`parse(InputStream)` method is provided as a convenience wrapper. It
+internally delegates to the streaming API by reading the stream in
+chunks.
 
 #### Blocking Example
 
@@ -119,12 +134,14 @@ public class ListFieldNames extends JSONDefaultHandler {
 
 ### Event-Driven Design
 
-The parser follows the same event-driven pattern as the SAX API for parsing XML.
-You create an implementation of the `JSONContentHandler` interface to receive parsing events.
-There is a handy `JSONDefaultHandler` class that you can subclass if you
-only want to implement a subset of the methods.
+The parser follows the same event-driven pattern as the SAX API for
+parsing XML. You create an implementation of the `JSONContentHandler`
+interface to receive parsing events. There is a handy
+`JSONDefaultHandler` class that you can subclass if you only want to
+implement a subset of the methods.
 
-Your handler will be notified of events in the JSON stream as they are recognized:
+Your handler will be notified of events in the JSON stream as they are
+recognized:
 - `startObject()` / `endObject()` - Object boundaries
 - `startArray()` / `endArray()` - Array boundaries  
 - `key(String)` - Object field names
@@ -134,92 +151,114 @@ Your handler will be notified of events in the JSON stream as they are recognize
 - `nullValue()` - Null values
 - `whitespace(String)` - Whitespace (if needed for pretty-printing)
 
-This event-driven model allows you to build custom JSON processors without materializing the entire document in memory—perfect for processing large JSON streams or building transformation pipelines.
+This event-driven model allows you to build custom JSON processors
+without materializing the entire document in memory—perfect for
+processing large JSON streams or building transformation pipelines.
 
 ## Serializer
-The parser follows the same pattern as the javax.xml.stream API for writing XML.
-You create an instance of JSONStreamWriter that wraps an output stream.
-You then call the JSON value construction methods, in order, to construct
-the JSON output representation.
-Note that no special handling is applied to the stream; you will need to flush
-and/or close it yourself if required.
-The JSONStreamWriter can be configured with an indent argument to beautify
-the output and make it more easily human-readable.
+
+The serializer follows the same pattern as the javax.xml.stream API for
+writing XML. You create an instance of `JSONWriter` that wraps a
+`WritableByteChannel` or `OutputStream`. You then call the JSON value
+construction methods, in order, to construct the JSON output
+representation.
+
+The `JSONWriter` uses an **NIO-first design** with automatic buffering
+and chunking. Data is automatically sent to the channel when the buffer
+reaches a threshold, making it ideal for streaming output scenarios.
+
+You can configure indentation using `IndentConfig` to beautify the output
+and make it more easily human-readable. If no indent configuration is
+provided, the output is compact (no unnecessary whitespace).
 
 ### Example
+
 Here is an example to create a simple JSON file:
 
-    import java.io.*;
-    import org.bluezoo.json.*;
-    
-    public class MakeJohnSmith {
-    
-        public static void main(String[] args) throws Exception {
-            JSONStreamWriter writer = new JSONStreamWriter(System.out, true);
-            writer.writeStartObject();
-            writer.writeKey("first_name");
-            writer.writeString("John");
-            writer.writeKey("last_name");
-            writer.writeString("Smith");
-            writer.writeKey("is_alive");
-            writer.writeBoolean(true);
-            writer.writeKey("age");
-            writer.writeNumber(27);
-            writer.writeKey("height");
-            writer.writeNumber(6.01);
-            writer.writeKey("address");
-            writer.writeStartObject();
-            writer.writeKey("street_address");
-            writer.writeString("21 2nd Street");
-            writer.writeKey("city");
-            writer.writeString("New York");
-            writer.writeEndObject(); // address
-            writer.writeKey("phone_numbers");
-            writer.writeStartArray();
-            writer.writeString("212 555-1234");
-            writer.writeString("646 555-4567");
-            writer.writeEndArray();
-            writer.writeKey("spouse");
-            writer.writeNull();
-            writer.writeEndObject(); // top level object
-            System.out.flush();
-        }
-    
+```java
+import java.io.*;
+import org.bluezoo.json.*;
+
+public class MakeJohnSmith {
+
+    public static void main(String[] args) throws Exception {
+        JSONWriter writer = new JSONWriter(System.out, 
+                                           IndentConfig.tabs());
+        writer.writeStartObject();
+        writer.writeKey("first_name");
+        writer.writeString("John");
+        writer.writeKey("last_name");
+        writer.writeString("Smith");
+        writer.writeKey("is_alive");
+        writer.writeBoolean(true);
+        writer.writeKey("age");
+        writer.writeNumber(27);
+        writer.writeKey("height");
+        writer.writeNumber(6.01);
+        writer.writeKey("address");
+        writer.writeStartObject();
+        writer.writeKey("street_address");
+        writer.writeString("21 2nd Street");
+        writer.writeKey("city");
+        writer.writeString("New York");
+        writer.writeEndObject(); // address
+        writer.writeKey("phone_numbers");
+        writer.writeStartArray();
+        writer.writeString("212 555-1234");
+        writer.writeString("646 555-4567");
+        writer.writeEndArray();
+        writer.writeKey("spouse");
+        writer.writeNull();
+        writer.writeEndObject(); // top level object
+        writer.close();
     }
 
+}
+```
+
 ## Installation
+
 An Apache Ant build file is included.
 
-    git clone https://github.com/cpkb-bluezoo/jsonparser.git
-    cd jsonparser
-    ant dist
+```bash
+git clone https://github.com/cpkb-bluezoo/jsonparser.git
+cd jsonparser
+ant dist
+```
 
-This will create a jar file in the dist subdirectory that you can add to your classpath.
+This will create a jar file in the dist subdirectory that you can add to
+your classpath.
 
 ## Conformance
-The parser has been tested with [JSONTestSuite](https://github.com/nst/JSONTestSuite)
-and is fully conformant with that test suite.
+
+The parser has been tested with
+[JSONTestSuite](https://github.com/nst/JSONTestSuite) and is fully
+conformant with that test suite.
 
 ## Maven integration
-You can incorporate this project directly into your Maven project.
-To do so, add the following elements to your project's pom.xml :
 
-    <repositories>
-        <repository>
-            <id>jitpack.io</id>
-            <url>https://jitpack.io</url>
-        </repository>
-    </repositories>
+You can incorporate this project directly into your Maven project. To do
+so, add the following elements to your project's pom.xml:
 
-    <dependencies>
-        <dependency>
-            <groupId>com.github.cpkb-bluezoo</groupId>
-            <artifactId>jsonparser</artifactId>
-            <version>1.0.2</version>
-        </dependency>
-    </dependencies>
+```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+
+<dependencies>
+    <dependency>
+        <groupId>com.github.cpkb-bluezoo</groupId>
+        <artifactId>jsonparser</artifactId>
+        <version>1.1.0</version>
+    </dependency>
+</dependencies>
+```
 
 ## License
-This project is licensed under the GNU Lesser General Public License v3.0 (LGPLv3).
-See the [COPYING](COPYING) file for details.
+
+This project is licensed under the GNU Lesser General Public License v3.0
+(LGPLv3). See the [COPYING](COPYING) file for details.
 

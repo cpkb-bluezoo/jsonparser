@@ -3,12 +3,13 @@ package org.bluezoo.json;
 import org.bluezoo.util.CompositeByteBuffer;
 
 import java.io.InputStream;
-import java.math.BigDecimal;
-import java.math.BigInteger;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
-import java.util.Deque;
 
 /**
  * A streaming JSON parser using the push (receive) model.
@@ -24,8 +25,8 @@ import java.util.Deque;
  * is also provided which internally delegates to the streaming API.
  * <p>
  * Parsing events are delivered via {@link JSONContentHandler} as tokens
- * are recognized. The parser maintains internal state between receive()
- * calls using a {@link CompositeByteBuffer} for underflow handling.
+ * are recognized. The parser handles byte-to-character decoding and BOM detection,
+ * then delegates tokenization to {@link JSONTokenizer}.
  *
  * <h3>Usage (Streaming)</h3>
  * <pre>{@code
@@ -52,64 +53,39 @@ import java.util.Deque;
  *
  * @author <a href='mailto:dog@gnu.org'>Chris Burdess</a>
  */
-public class JSONParser implements JSONLocator {
+public class JSONParser {
 
-    // Structural tokens
-    private static final byte LEFT_BRACKET = '[';
-    private static final byte LEFT_BRACE = '{';
-    private static final byte RIGHT_BRACKET = ']';
-    private static final byte RIGHT_BRACE = '}';
-    private static final byte COLON = ':';
-    private static final byte COMMA = ',';
-    private static final byte QUOTE = '"';
-    private static final byte BACKSLASH = '\\';
-
-    // Whitespace
-    private static final byte SPACE = ' ';
-    private static final byte TAB = '\t';
-    private static final byte LF = '\n';
-    private static final byte CR = '\r';
-
-    // Parser states
-    enum ExpectState { VALUE, KEY, COMMA_OR_CLOSE, COLON, EOF }
-    enum ContextState { OBJECT, ARRAY }
-    enum TokenState { 
-        NONE,           // Not in a token
-        STRING,         // In a string
-        STRING_ESCAPE,  // After backslash in string
-        STRING_HEX,     // In hex escape sequence
-        NUMBER,         // In a number
-        LITERAL,        // In true/false/null
-        WHITESPACE      // In whitespace
-    }
+    private static final int DEFAULT_BUFFER_SIZE = 8192;
 
     private JSONContentHandler handler;
     private final CompositeByteBuffer buffer = new CompositeByteBuffer();
+    private JSONTokenizer tokenizer;
+    private CharsetDecoder decoder;
+    private CharBuffer charBuffer;
+    private final int bufferSize;
     
-    // Parser state
-    private ExpectState expectState = ExpectState.VALUE;
-    private final Deque<ContextState> contextStack = new ArrayDeque<>();
-    private ContextState currentContext;
-    private TokenState tokenState = TokenState.NONE;
-    private boolean seenComma;
-    private int tokenCount;
-    
-    // Token accumulation
-    private final StringBuilder tokenBuilder = new StringBuilder();
-    private int hexDigitsRemaining;
-    private int hexValue;
-    
-    // Location tracking
-    private int lineNumber = 1;
-    private int columnNumber = 1;
-    
-    // BOM detection
+    // Stream state
     private boolean checkedBom;
+    private boolean closed;
 
     /**
-     * Creates a new JSON parser.
+     * Creates a new JSON parser with a default buffer size of 8KB.
      */
     public JSONParser() {
+        this(DEFAULT_BUFFER_SIZE);
+    }
+
+    /**
+     * Creates a new JSON parser with the specified buffer size.
+     *
+     * @param bufferSize the initial size of the character buffer in bytes
+     */
+    public JSONParser(int bufferSize) {
+        if (bufferSize <= 0) {
+            throw new IllegalArgumentException("Buffer size must be positive");
+        }
+        this.bufferSize = bufferSize;
+        this.decoder = StandardCharsets.UTF_8.newDecoder();
     }
 
     /**
@@ -119,9 +95,6 @@ public class JSONParser implements JSONLocator {
      */
     public void setContentHandler(JSONContentHandler handler) {
         this.handler = handler;
-        if (handler != null) {
-            handler.setLocator(this);
-        }
     }
 
     /**
@@ -131,23 +104,29 @@ public class JSONParser implements JSONLocator {
      * and delegates to the streaming {@link #receive(ByteBuffer)} API.
      * The stream is read until EOF, then {@link #close()} is called.
      * <p>
+     * The parser is automatically reset before parsing, allowing this
+     * method to be called multiple times to parse different documents.
+     * <p>
      * Note: This method does not close the InputStream.
      *
      * @param in the input stream to parse
      * @throws JSONException if there is a parsing error
      */
     public void parse(InputStream in) throws JSONException {
+        // Reset for new document
+        reset();
+        
         try {
             byte[] chunk = new byte[8192];
             int bytesRead;
             
             while ((bytesRead = in.read(chunk)) != -1) {
-                ByteBuffer buffer = ByteBuffer.wrap(chunk, 0, bytesRead);
-                receive(buffer);
+                ByteBuffer bb = ByteBuffer.wrap(chunk, 0, bytesRead);
+                receive(bb);
             }
             
             close();
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new JSONException("I/O error reading stream", e);
         }
     }
@@ -160,521 +139,266 @@ public class JSONParser implements JSONLocator {
      * buffered for the next receive() call.
      *
      * @param data the byte buffer to process
-     * @throws JSONException if there is a parsing error
+     * @throws JSONException if there is a parsing error or stream is closed
      */
     public void receive(ByteBuffer data) throws JSONException {
+        if (closed) {
+            throw new JSONException("Cannot receive data after close()");
+        }
+        
         buffer.put(data);
         buffer.flip();
         
         // Check for BOM on first chunk
         if (!checkedBom) {
-            checkBom();
+            if (!checkBom()) {
+                // Need more data to determine BOM
+                buffer.compact();
+                return;
+            }
             checkedBom = true;
         }
         
-        parse();
+        // Create tokenizer if needed
+        if (tokenizer == null) {
+            tokenizer = new JSONTokenizer(handler);
+        }
         
+        // Decode bytes to characters
+        boolean decoded = decodeToCharBuffer();
+        if (!decoded) {
+            // Need more data for complete character sequence
+            buffer.compact();
+            return;
+        }
+        
+        // Process tokens
+        charBuffer.flip(); // Put in read mode for tokenizer
+        tokenizer.receive(charBuffer);
+        
+        // Compact to preserve unconsumed characters
+        charBuffer.compact();
+        
+        // Compact byte buffer to preserve any undecoded bytes
         buffer.compact();
     }
 
     /**
      * Close the parser, signaling end of input.
      * <p>
-     * This validates that the JSON document is complete.
+     * This validates that the JSON document is complete. The closed state
+     * is signaled to the tokenizer, which will treat end-of-buffer as 
+     * end-of-token (e.g., for numbers without delimiters like "42").
+     * <p>
+     * After closing, further calls to receive() will throw an exception.
+     * Use {@link #reset()} to prepare the parser for a new document.
      *
-     * @throws JSONException if the document is incomplete
+     * @throws JSONException if the document is incomplete or malformed
      */
     public void close() throws JSONException {
-        // Finish any pending token
-        if (tokenState != TokenState.NONE) {
-            finishToken();
+        if (closed) {
+            return; // Already closed
         }
         
-        // Validate complete document
-        if (!contextStack.isEmpty()) {
-            throw new JSONException("Unclosed object or array");
-        }
-        if (tokenCount == 0) {
+        closed = true;
+        
+        // Check if we have any data at all
+        if (tokenizer == null) {
             throw new JSONException("No data");
         }
-    }
-
-    @Override
-    public int getLineNumber() {
-        return lineNumber;
-    }
-
-    @Override
-    public int getColumnNumber() {
-        return columnNumber;
-    }
-
-    /**
-     * Check for UTF-8 BOM and skip it.
-     */
-    private void checkBom() {
-        if (buffer.remaining() >= 3) {
-            if (buffer.get(0) == (byte) 0xEF &&
-                buffer.get(1) == (byte) 0xBB &&
-                buffer.get(2) == (byte) 0xBF) {
-                // Skip UTF-8 BOM
-                buffer.position(buffer.position() + 3);
-            }
-        }
-    }
-
-    /**
-     * Main parse loop.
-     */
-    private void parse() throws JSONException {
-        while (buffer.hasRemaining()) {
-            byte b = buffer.get();
+        
+        tokenizer.setClosed(true);
+        
+        // Process any remaining characters in charBuffer with closed flag set
+        if (charBuffer != null && charBuffer.position() > 0) {
+            charBuffer.flip();
+            tokenizer.receive(charBuffer);
             
-            // Continue parsing based on current token state
-            switch (tokenState) {
-                case NONE:
-                    parseStart(b);
-                    break;
-                case STRING:
-                    parseString(b);
-                    break;
-                case STRING_ESCAPE:
-                    parseStringEscape(b);
-                    break;
-                case STRING_HEX:
-                    parseStringHex(b);
-                    break;
-                case NUMBER:
-                    if (!parseNumber(b)) {
-                        // Character wasn't part of number, reprocess
-                        buffer.position(buffer.position() - 1);
-                        finishToken();
-                    }
-                    break;
-                case LITERAL:
-                    if (!parseLiteral(b)) {
-                        // Character wasn't part of literal, reprocess
-                        buffer.position(buffer.position() - 1);
-                        finishToken();
-                    }
-                    break;
-                case WHITESPACE:
-                    if (!parseWhitespace(b)) {
-                        // Character wasn't whitespace, reprocess
-                        buffer.position(buffer.position() - 1);
-                        finishToken();
-                    }
-                    break;
+            // After processing, check if anything is still left unparsed
+            if (charBuffer.hasRemaining()) {
+                throw new JSONException("Unclosed string or incomplete token at end of input");
             }
         }
-    }
-
-    /**
-     * Parse the start of a token.
-     */
-    private void parseStart(byte b) throws JSONException {
-        // Update location for newlines
-        if (b == LF) {
-            lineNumber++;
-            columnNumber = 1;
-        } else if (b == CR) {
-            // Will check for LF next
-            lineNumber++;
-            columnNumber = 1;
-        } else {
-            columnNumber++;
-        }
-
-        // Handle whitespace
-        if (isWhitespace(b)) {
-            tokenState = TokenState.WHITESPACE;
-            tokenBuilder.setLength(0);
-            tokenBuilder.append((char) b);
-            return;
-        }
-
-        // Handle structural tokens
-        switch (b) {
-            case LEFT_BRACE:
-                handleStartObject();
-                return;
-            case RIGHT_BRACE:
-                handleEndObject();
-                return;
-            case LEFT_BRACKET:
-                handleStartArray();
-                return;
-            case RIGHT_BRACKET:
-                handleEndArray();
-                return;
-            case COLON:
-                handleColon();
-                return;
-            case COMMA:
-                handleComma();
-                return;
-            case QUOTE:
-                tokenState = TokenState.STRING;
-                tokenBuilder.setLength(0);
-                return;
-        }
-
-        // Check expected state for values
-        if (expectState != ExpectState.VALUE) {
-            throw new JSONException("Unexpected character: " + (char) b);
-        }
-
-        // Start number or literal
-        if (b == '-' || (b >= '0' && b <= '9')) {
-            tokenState = TokenState.NUMBER;
-            tokenBuilder.setLength(0);
-            tokenBuilder.append((char) b);
-        } else if (b == 't' || b == 'f' || b == 'n') {
-            tokenState = TokenState.LITERAL;
-            tokenBuilder.setLength(0);
-            tokenBuilder.append((char) b);
-        } else {
-            throw new JSONException("Unexpected character: " + (char) b);
-        }
-    }
-
-    /**
-     * Parse string content.
-     */
-    private void parseString(byte b) throws JSONException {
-        columnNumber++;
         
-        if (b == QUOTE) {
-            finishToken();
-        } else if (b == BACKSLASH) {
-            tokenState = TokenState.STRING_ESCAPE;
-        } else if (b < 0x20) {
-            throw new JSONException("Unescaped control character in string");
-        } else {
-            tokenBuilder.append((char) (b & 0xFF));
-        }
-    }
-
-    /**
-     * Parse escape sequence in string.
-     */
-    private void parseStringEscape(byte b) throws JSONException {
-        columnNumber++;
-        
-        switch (b) {
-            case '"':
-                tokenBuilder.append('"');
-                break;
-            case '\\':
-                tokenBuilder.append('\\');
-                break;
-            case '/':
-                tokenBuilder.append('/');
-                break;
-            case 'b':
-                tokenBuilder.append('\b');
-                break;
-            case 'f':
-                tokenBuilder.append('\f');
-                break;
-            case 'n':
-                tokenBuilder.append('\n');
-                break;
-            case 'r':
-                tokenBuilder.append('\r');
-                break;
-            case 't':
-                tokenBuilder.append('\t');
-                break;
-            case 'u':
-                tokenState = TokenState.STRING_HEX;
-                hexDigitsRemaining = 4;
-                hexValue = 0;
-                return;
-            default:
-                throw new JSONException("Invalid escape character: " + (char) b);
+        // Check tokenizer state for structural issues
+        if (!tokenizer.seenAnyToken) {
+            throw new JSONException("No data");
         }
         
-        tokenState = TokenState.STRING;
-    }
-
-    /**
-     * Parse hex digits in unicode escape.
-     */
-    private void parseStringHex(byte b) throws JSONException {
-        columnNumber++;
-        
-        int digit = unhex(b);
-        hexValue = (hexValue << 4) | digit;
-        hexDigitsRemaining--;
-        
-        if (hexDigitsRemaining == 0) {
-            tokenBuilder.append((char) hexValue);
-            tokenState = TokenState.STRING;
-        }
-    }
-
-    /**
-     * Parse number.
-     * @return true if byte was part of number
-     */
-    private boolean parseNumber(byte b) {
-        if ((b >= '0' && b <= '9') ||
-            b == '.' || b == 'e' || b == 'E' ||
-            b == '+' || b == '-') {
-            columnNumber++;
-            tokenBuilder.append((char) b);
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Parse literal (true/false/null).
-     * @return true if byte was part of literal
-     */
-    private boolean parseLiteral(byte b) {
-        if ((b >= 'a' && b <= 'z')) {
-            columnNumber++;
-            tokenBuilder.append((char) b);
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Parse whitespace.
-     * @return true if byte was whitespace
-     */
-    private boolean parseWhitespace(byte b) {
-        if (isWhitespace(b)) {
-            if (b == LF) {
-                lineNumber++;
-                columnNumber = 1;
-            } else if (b == CR) {
-                lineNumber++;
-                columnNumber = 1;
+        if (!tokenizer.depthStack.isEmpty()) {
+            Token unclosed = tokenizer.depthStack.peek();
+            if (unclosed == Token.START_OBJECT) {
+                throw new JSONException("Unclosed object");
             } else {
-                columnNumber++;
+                throw new JSONException("Unclosed array");
             }
-            tokenBuilder.append((char) b);
-            return true;
         }
-        return false;
     }
 
     /**
-     * Finish the current token and fire events.
+     * Reset the parser to parse a new document.
+     * <p>
+     * Clears all internal state, allowing the parser to be reused.
+     * This is called automatically by {@link #parse(InputStream)}.
      */
-    private void finishToken() throws JSONException {
-        switch (tokenState) {
-            case STRING:
-                handleString(tokenBuilder.toString());
-                break;
-            case NUMBER:
-                handleNumber(tokenBuilder.toString());
-                break;
-            case LITERAL:
-                handleLiteral(tokenBuilder.toString());
-                break;
-            case WHITESPACE:
-                if (handler != null) {
-                    handler.whitespace(tokenBuilder.toString());
+    public void reset() {
+        checkedBom = false;
+        closed = false;
+        
+        // Clear buffer
+        buffer.clear();
+        buffer.compact();
+        
+        // Clear char buffer
+        if (charBuffer != null) {
+            charBuffer.clear();
+        }
+        
+        // Clear tokenizer
+        tokenizer = null;
+        
+        // Reset decoder
+        decoder.reset();
+    }
+
+    /**
+     * Check for and skip BOM if present.
+     * Optimized for UTF-8 (fast path), also detects UTF-16/32 to reject them.
+     * Returns false if we need more data to determine if BOM is present.
+     */
+    private boolean checkBom() throws JSONException {
+        int remaining = buffer.remaining();
+        
+        if (remaining == 0) {
+            return false; // Need at least 1 byte
+        }
+        
+        // Use get(int) to peek without consuming
+        int startPos = buffer.position();
+        byte b1 = buffer.get(startPos);
+        
+        // Fast path: UTF-8 BOM (EF BB BF) - most common case
+        if (b1 == (byte) 0xEF) {
+            if (remaining < 3) {
+                // Might be UTF-8 BOM, need more data
+                if (remaining >= 2 && buffer.get(startPos + 1) == (byte) 0xBB) {
+                    return false; // Partial UTF-8 BOM
                 }
-                break;
-            default:
-                break;
-        }
-        tokenState = TokenState.NONE;
-        tokenBuilder.setLength(0);
-    }
-
-    private void handleStartObject() throws JSONException {
-        if (expectState != ExpectState.VALUE) {
-            throw new JSONException("Unexpected '{'");
-        }
-        
-        seenComma = false;
-        currentContext = ContextState.OBJECT;
-        contextStack.push(currentContext);
-        expectState = ExpectState.KEY;
-        tokenCount++;
-        
-        if (handler != null) {
-            handler.startObject();
-        }
-    }
-
-    private void handleEndObject() throws JSONException {
-        if (currentContext != ContextState.OBJECT) {
-            throw new JSONException("Unexpected '}'");
-        }
-        if (seenComma) {
-            throw new JSONException("Trailing comma in object");
-        }
-        
-        contextStack.pop();
-        currentContext = contextStack.isEmpty() ? null : contextStack.peek();
-        expectState = (currentContext == null) ? ExpectState.EOF : ExpectState.COMMA_OR_CLOSE;
-        
-        if (handler != null) {
-            handler.endObject();
-        }
-    }
-
-    private void handleStartArray() throws JSONException {
-        if (expectState != ExpectState.VALUE) {
-            throw new JSONException("Unexpected '['");
-        }
-        
-        seenComma = false;
-        currentContext = ContextState.ARRAY;
-        contextStack.push(currentContext);
-        expectState = ExpectState.VALUE;
-        tokenCount++;
-        
-        if (handler != null) {
-            handler.startArray();
-        }
-    }
-
-    private void handleEndArray() throws JSONException {
-        if (currentContext != ContextState.ARRAY) {
-            throw new JSONException("Unexpected ']'");
-        }
-        if (seenComma) {
-            throw new JSONException("Trailing comma in array");
-        }
-        
-        contextStack.pop();
-        currentContext = contextStack.isEmpty() ? null : contextStack.peek();
-        expectState = (currentContext == null) ? ExpectState.EOF : ExpectState.COMMA_OR_CLOSE;
-        
-        if (handler != null) {
-            handler.endArray();
-        }
-    }
-
-    private void handleColon() throws JSONException {
-        if (expectState != ExpectState.COLON) {
-            throw new JSONException("Unexpected ':'");
-        }
-        expectState = ExpectState.VALUE;
-    }
-
-    private void handleComma() throws JSONException {
-        if (expectState != ExpectState.COMMA_OR_CLOSE) {
-            throw new JSONException("Unexpected ','");
-        }
-        
-        seenComma = true;
-        if (currentContext == ContextState.OBJECT) {
-            expectState = ExpectState.KEY;
-        } else {
-            expectState = ExpectState.VALUE;
-        }
-    }
-
-    private void handleString(String value) throws JSONException {
-        tokenCount++;
-        seenComma = false;
-        
-        if (expectState == ExpectState.KEY) {
-            if (handler != null) {
-                handler.key(value);
-            }
-            expectState = ExpectState.COLON;
-        } else if (expectState == ExpectState.VALUE) {
-            if (handler != null) {
-                handler.stringValue(value);
-            }
-            expectState = (currentContext == null) ? ExpectState.EOF : ExpectState.COMMA_OR_CLOSE;
-        } else {
-            throw new JSONException("Unexpected string");
-        }
-    }
-
-    private void handleNumber(String value) throws JSONException {
-        if (expectState != ExpectState.VALUE) {
-            throw new JSONException("Unexpected number");
-        }
-        
-        tokenCount++;
-        seenComma = false;
-        
-        Number number = parseNumber(value);
-        if (handler != null) {
-            handler.numberValue(number);
-        }
-        
-        expectState = (currentContext == null) ? ExpectState.EOF : ExpectState.COMMA_OR_CLOSE;
-    }
-
-    private void handleLiteral(String value) throws JSONException {
-        if (expectState != ExpectState.VALUE) {
-            throw new JSONException("Unexpected literal: " + value);
-        }
-        
-        tokenCount++;
-        seenComma = false;
-        
-        switch (value) {
-            case "true":
-                if (handler != null) {
-                    handler.booleanValue(true);
+                if (remaining == 1) {
+                    return false; // Could be UTF-8 BOM
                 }
-                break;
-            case "false":
-                if (handler != null) {
-                    handler.booleanValue(false);
-                }
-                break;
-            case "null":
-                if (handler != null) {
-                    handler.nullValue();
-                }
-                break;
-            default:
-                throw new JSONException("Invalid literal: " + value);
-        }
-        
-        expectState = (currentContext == null) ? ExpectState.EOF : ExpectState.COMMA_OR_CLOSE;
-    }
-
-    private Number parseNumber(String s) throws JSONException {
-        try {
-            if (s.contains(".") || s.contains("e") || s.contains("E")) {
-                return Double.valueOf(s);
             } else {
-                try {
-                    long l = Long.parseLong(s);
-                    if (l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) {
-                        return Integer.valueOf((int) l);
-                    }
-                    return Long.valueOf(l);
-                } catch (NumberFormatException e) {
-                    return new BigInteger(s);
+                byte b2 = buffer.get(startPos + 1);
+                byte b3 = buffer.get(startPos + 2);
+                
+                if (b2 == (byte) 0xBB && b3 == (byte) 0xBF) {
+                    // UTF-8 BOM found, skip it
+                    buffer.position(startPos + 3);
+                    return true;
                 }
             }
-        } catch (NumberFormatException e) {
-            throw new JSONException("Invalid number: " + s, e);
+            // Not a UTF-8 BOM, proceed with parsing
+            return true;
         }
-    }
-
-    private boolean isWhitespace(byte b) {
-        return b == SPACE || b == TAB || b == LF || b == CR;
-    }
-
-    private int unhex(byte b) throws JSONException {
-        if (b >= '0' && b <= '9') {
-            return b - '0';
-        } else if (b >= 'A' && b <= 'F') {
-            return b - 'A' + 10;
-        } else if (b >= 'a' && b <= 'f') {
-            return b - 'a' + 10;
+        
+        // Check for UTF-16/32 BOMs (rare, error path)
+        // UTF-16 BE: FE FF (2 bytes)
+        if (b1 == (byte) 0xFE) {
+            if (remaining < 2) {
+                return false; // Need more data
+            }
+            if (buffer.get(startPos + 1) == (byte) 0xFF) {
+                throw new JSONException("UTF-16 BE encoding not supported");
+            }
+            return true; // Not a BOM
         }
-        throw new JSONException("Invalid hex digit: " + (char) b);
+        
+        // UTF-16 LE or UTF-32 LE: FF FE ... (need 4 bytes to distinguish)
+        if (b1 == (byte) 0xFF) {
+            if (remaining < 2) {
+                return false; // Need more data
+            }
+            if (buffer.get(startPos + 1) == (byte) 0xFE) {
+                if (remaining < 4) {
+                    return false; // Need 4 bytes to distinguish UTF-16 LE from UTF-32 LE
+                }
+                // Check for UTF-32 LE: FF FE 00 00
+                if (buffer.get(startPos + 2) == (byte) 0x00 && 
+                    buffer.get(startPos + 3) == (byte) 0x00) {
+                    throw new JSONException("UTF-32 LE encoding not supported");
+                }
+                // UTF-16 LE
+                throw new JSONException("UTF-16 LE encoding not supported");
+            }
+            return true; // Not a BOM
+        }
+        
+        // UTF-32 BE: 00 00 FE FF (4 bytes)
+        if (b1 == (byte) 0x00) {
+            if (remaining < 2) {
+                return false; // Need more data
+            }
+            if (buffer.get(startPos + 1) == (byte) 0x00) {
+                if (remaining < 4) {
+                    return false; // Might be UTF-32 BE BOM
+                }
+                if (buffer.get(startPos + 2) == (byte) 0xFE && 
+                    buffer.get(startPos + 3) == (byte) 0xFF) {
+                    throw new JSONException("UTF-32 BE encoding not supported");
+                }
+            }
+            return true; // Not a BOM
+        }
+        
+        // No BOM detected, proceed with parsing
+        return true;
     }
 
+    /**
+     * Decode bytes from buffer to charBuffer.
+     * Returns true if decoding completed, false if need more bytes for complete character.
+     */
+    private boolean decodeToCharBuffer() throws JSONException {
+        // Ensure charBuffer exists and has space
+        if (charBuffer == null) {
+            charBuffer = CharBuffer.allocate(Math.max(buffer.remaining(), bufferSize));
+        } else {
+            // charBuffer is in write mode with underflow at start
+            int underflowSize = charBuffer.position();
+            int availableSpace = charBuffer.remaining();
+            int needed = buffer.remaining();
+            
+            if (availableSpace < needed) {
+                // Need to expand - preserve underflow
+                int newCapacity = Math.max(underflowSize + needed + 1024, bufferSize);
+                CharBuffer newBuffer = CharBuffer.allocate(newCapacity);
+                
+                // Copy underflow from old buffer
+                charBuffer.flip(); // switch to read mode
+                newBuffer.put(charBuffer); // copy underflow
+                charBuffer = newBuffer;
+                // charBuffer is now in write mode with underflow copied
+            }
+        }
+        
+        // Decode using CompositeByteBuffer's decode method
+        CoderResult result = buffer.decode(decoder, charBuffer, closed);
+        
+        if (result.isUnderflow()) {
+            // Normal - processed all available bytes (or need more for complete character)
+            return true;
+        } else if (result.isOverflow()) {
+            // CharBuffer full - should not happen with our sizing
+            throw new JSONException("CharBuffer overflow during decoding");
+        } else if (result.isError()) {
+            // Malformed or unmappable input
+            try {
+                result.throwException();
+            } catch (Exception e) {
+                throw new JSONException("Character decoding error", e);
+            }
+        }
+        
+        return true;
+    }
 }
-

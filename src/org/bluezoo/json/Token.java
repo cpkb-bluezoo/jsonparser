@@ -22,22 +22,20 @@
 package org.bluezoo.json;
 
 /**
- * Base token class.
+ * JSON token types.
  *
  * @author <a href='mailto:dog@gnu.org'>Chris Burdess</a>
  */
-class Token {
-        
-    enum Type { START_OBJECT, END_OBJECT, START_ARRAY, END_ARRAY, NUMBER, STRING, BOOLEAN, NULL, COMMA, COLON, WHITESPACE, EOF };
-
-    final Type type;
-
-    Token(Type type) {
-        this.type = type;
-    }
-
-    public String toString() {
-        return type.toString();
-    }
-
+enum Token {
+    START_OBJECT,
+    END_OBJECT,
+    START_ARRAY,
+    END_ARRAY,
+    NUMBER,
+    STRING,
+    BOOLEAN,
+    NULL,
+    COMMA,
+    COLON,
+    WHITESPACE
 }
