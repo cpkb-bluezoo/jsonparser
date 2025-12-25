@@ -25,7 +25,7 @@
  * <h2>Overview</h2>
  * <p>
  * This library provides fast, standards-compliant JSON parsing and writing
- * with minimal memory overhead (26KB). Unlike object-mapping libraries such
+ * with minimal memory overhead (24KB). Unlike object-mapping libraries such
  * as GSON (290KB) or Jackson (600KB), this library uses an event-driven,
  * streaming approach that enables:
  * </p>

@@ -2,7 +2,7 @@
 JSON parser and serializer for Java
 
 This is a tiny and efficient JSON parser and serialization library for
-Java. It takes up only 26KB (including the serialisation feature), as
+Java. It takes up only 24KB (including the serialisation feature), as
 opposed to object-mapping-based JSON parsers such as GSON (290KB) or
 Jackson (600KB), and is fast and conformant.
 
