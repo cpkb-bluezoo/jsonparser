@@ -4,7 +4,8 @@ JSON parser and serializer for Java
 This is a tiny and efficient JSON parser and serialization library for
 Java. It takes up only 26KB (including the serialisation feature), as
 opposed to object-mapping-based JSON parsers such as GSON (290KB) or
-Jackson (600KB), and is fast and conformant.
+Jackson (600KB), and is fast and conformant. The streaming parser operates
+in **constant memory** regardless of document size.
 
 Full JavaDoc documentation is included in the package, see the doc
 subdirectory.
@@ -29,34 +30,48 @@ This design makes the parser ideal for:
 - **Event-driven architectures** (reactive streams, actors)
 - **High-concurrency servers** where blocking is prohibitive
 - **Data pipeline architectures** where JSON transformation is one stage
+- **Memory-constrained environments** — operates in constant memory
 
-Traditional object-mapping based JSON parsers such as GSON or Jasper, in
-contrast, are **blocking** - your application thread has to block while
+Traditional object-mapping based JSON parsers such as GSON or Jackson, in
+contrast, are **blocking** — your application thread has to block while
 it processes the entire message. If the message hasn't been completely
 delivered yet, your entire process has to wait. Then when it finally
 produces the parse result, that result is an object taking up memory
-proportional to the size of the JSON message. With an event-based parser,
-you have as little memory overhead as you want: you decide how large the
-chunks are, there is no memory overhead beyond that and JSON semantic
-events are ready to process before the parse is complete and even before
-the message has finished arriving over the network: near-zero latency.
+proportional to the size of the JSON message.
+
+With this event-based parser, memory usage is **constant** — only your
+buffer size, regardless of how large the JSON document is. You control
+the buffer, there is no internal buffering, and JSON semantic events are
+delivered before the parse is complete, even before the message has
+finished arriving over the network: near-zero latency, zero-copy design.
 
 #### How It Works
 
-The parser maintains internal state between calls, buffering incomplete
-tokens and emitting parsing events via the SAX-like `JSONContentHandler`
-interface as soon as complete tokens are recognized. This allows it to
-operate as a **streaming transformer** in a data pipeline, converting raw
-byte chunks into semantic JSON events.
+The parser maintains internal state between calls and emits parsing events
+via the SAX-like `JSONContentHandler` interface as soon as complete tokens
+are recognized. This allows it to operate as a **streaming transformer** in
+a data pipeline, converting raw byte chunks into semantic JSON events.
+
+The parser operates in **constant memory** — it does not buffer incomplete
+tokens internally. Instead, when a token spans chunk boundaries, the parser
+leaves unconsumed bytes in the buffer (underflow). The caller is responsible
+for the standard NIO buffer lifecycle: `compact()`, read more data, `flip()`.
 
 **Core Methods:**
 - `receive(ByteBuffer data)` - Push a chunk of bytes into the parser
 - `close()` - Signal end of input and validate document completeness
 
-#### Async Streaming Example
+**Buffer Contract:**
+- Provide the buffer in read mode (after `flip()`)
+- After `receive()` returns, `buffer.position()` indicates unconsumed data
+- If `position() < limit()`, call `compact()` before reading more data
+- This zero-copy design minimizes allocations and GC pressure
+
+#### Async Streaming Example (NIO Channel)
 
 ```java
-import java.nio.ByteBuffer;
+import java.nio.*;
+import java.nio.channels.*;
 import org.bluezoo.json.*;
 
 public class AsyncJSONProcessor extends JSONDefaultHandler {
@@ -71,33 +86,41 @@ public class AsyncJSONProcessor extends JSONDefaultHandler {
         System.out.println("String: " + value);
     }
     
-    public static void processAsyncData() throws JSONException {
+    public static void processChannel(ReadableByteChannel channel) 
+            throws Exception {
         JSONParser parser = new JSONParser();
         parser.setContentHandler(new AsyncJSONProcessor());
         
-        // Simulate async data arrival - feed bytes as they arrive
-        // from network, file, queue, etc.
-        ByteBuffer chunk1 = ByteBuffer.wrap("{\"name\":".getBytes());
-        parser.receive(chunk1);
+        ByteBuffer buffer = ByteBuffer.allocate(8192);
         
-        ByteBuffer chunk2 = ByteBuffer.wrap("\"Alice\",".getBytes());
-        parser.receive(chunk2);
+        while (channel.read(buffer) != -1) {
+            buffer.flip();              // Switch to read mode
+            parser.receive(buffer);     // Parse available data
+            buffer.compact();           // Preserve unconsumed bytes
+        }
         
-        ByteBuffer chunk3 = ByteBuffer.wrap("\"age\":30}".getBytes());
-        parser.receive(chunk3);
+        // Process any remaining data
+        buffer.flip();
+        if (buffer.hasRemaining()) {
+            parser.receive(buffer);
+        }
         
-        // Signal completion
-        parser.close();
+        parser.close();  // Validate document completeness
     }
 }
 ```
 
+The `compact()` / `flip()` cycle ensures that partial tokens spanning chunk
+boundaries are preserved and completed when more data arrives. This pattern
+is standard for NIO and works naturally with non-blocking channels,
+selectors, and async I/O frameworks.
+
 This non-blocking approach means your application can:
 - Process JSON data as it arrives without waiting for complete documents
-- Integrate with async I/O frameworks (Gumdrop, Netty, Vert.x, etc.)
-- Build reactive data pipelines where JSON parsing is a transformation
-  stage
+- Integrate with async I/O frameworks (Netty, Vert.x, etc.)
+- Build reactive data pipelines where JSON parsing is a transformation stage
 - Handle multiple concurrent JSON streams without thread-per-connection
+- Process arbitrarily large documents in fixed memory
 
 ### Traditional Blocking API (Convenience)
 
@@ -252,7 +275,7 @@ so, add the following elements to your project's pom.xml:
     <dependency>
         <groupId>com.github.cpkb-bluezoo</groupId>
         <artifactId>jsonparser</artifactId>
-        <version>1.1.0</version>
+        <version>1.2</version>
     </dependency>
 </dependencies>
 ```

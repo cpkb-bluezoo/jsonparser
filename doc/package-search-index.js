@@ -1,1 +1,1 @@
-packageSearchIndex = [{"l":"All Packages","url":"allpackages-index.html"},{"l":"org.bluezoo.json"},{"l":"org.bluezoo.util"}]
+packageSearchIndex = [{"l":"All Packages","url":"allpackages-index.html"},{"m":"org.bluezoo.json","l":"org.bluezoo.json"}]

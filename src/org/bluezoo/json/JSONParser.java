@@ -1,12 +1,9 @@
 package org.bluezoo.json;
 
-import org.bluezoo.util.CompositeByteBuffer;
-
 import java.io.InputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
-import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.StandardCharsets;
@@ -28,15 +25,29 @@ import java.nio.charset.StandardCharsets;
  * are recognized. The parser handles byte-to-character decoding and BOM detection,
  * then delegates tokenization to {@link JSONTokenizer}.
  *
+ * <h3>Buffer Management Contract</h3>
+ * <p>This parser follows the standard non-blocking streaming contract:
+ * <ul>
+ *   <li>The caller provides a buffer in read mode (ready for get operations)</li>
+ *   <li>The parser consumes as many complete tokens as possible</li>
+ *   <li>After {@link #receive(ByteBuffer)} returns, the buffer's position
+ *       indicates where unconsumed data begins</li>
+ *   <li>If there is unconsumed data (partial token), the caller MUST call
+ *       {@link ByteBuffer#compact()} before reading more data into the buffer</li>
+ *   <li>The next {@code receive()} call will continue from where parsing left off</li>
+ * </ul>
+ *
  * <h3>Usage (Streaming)</h3>
  * <pre>{@code
  * JSONParser parser = new JSONParser();
  * parser.setContentHandler(myHandler);
  * 
- * // As bytes arrive...
- * parser.receive(chunk1);
- * parser.receive(chunk2);
- * ...
+ * ByteBuffer buffer = ByteBuffer.allocate(8192);
+ * while (channel.read(buffer) > 0) {
+ *     buffer.flip();
+ *     parser.receive(buffer);
+ *     buffer.compact();
+ * }
  * parser.close();
  * }</pre>
  *
@@ -58,7 +69,6 @@ public class JSONParser {
     private static final int DEFAULT_BUFFER_SIZE = 8192;
 
     private JSONContentHandler handler;
-    private final CompositeByteBuffer buffer = new CompositeByteBuffer();
     private JSONTokenizer tokenizer;
     private CharsetDecoder decoder;
     private CharBuffer charBuffer;
@@ -117,12 +127,32 @@ public class JSONParser {
         reset();
         
         try {
-            byte[] chunk = new byte[8192];
-            int bytesRead;
+            ByteBuffer buffer = ByteBuffer.allocate(bufferSize);
             
-            while ((bytesRead = in.read(chunk)) != -1) {
-                ByteBuffer bb = ByteBuffer.wrap(chunk, 0, bytesRead);
-                receive(bb);
+            // Read into the buffer's backing array
+            while (true) {
+                // Read into available space (after any unconsumed data)
+                int bytesRead = in.read(buffer.array(), buffer.position(), 
+                                        buffer.remaining());
+                if (bytesRead == -1) {
+                    break;
+                }
+                
+                // Advance position to reflect bytes read
+                buffer.position(buffer.position() + bytesRead);
+                
+                // Switch to read mode and parse
+                buffer.flip();
+                receive(buffer);
+                
+                // Preserve any unconsumed bytes for next iteration
+                buffer.compact();
+            }
+            
+            // Process any remaining data in the buffer
+            buffer.flip();
+            if (buffer.hasRemaining()) {
+                receive(buffer);
             }
             
             close();
@@ -136,9 +166,20 @@ public class JSONParser {
      * <p>
      * Bytes are processed immediately. Parsing events are fired to the
      * content handler as tokens are recognized. Incomplete tokens are
-     * buffered for the next receive() call.
+     * left in the buffer - the position is set to the start of the
+     * incomplete token.
+     * <p>
+     * <strong>Buffer Contract:</strong> The byte buffer must be in read mode
+     * (after {@code flip()}). After this method returns:
+     * <ul>
+     *   <li>The buffer's position indicates where unconsumed data begins</li>
+     *   <li>If {@code position() < limit()}, there is a partial token that needs
+     *       more data to complete</li>
+     *   <li>The caller MUST call {@code buffer.compact()} before reading more
+     *       data into the buffer</li>
+     * </ul>
      *
-     * @param data the byte buffer to process
+     * @param data the byte buffer to process (must be in read mode)
      * @throws JSONException if there is a parsing error or stream is closed
      */
     public void receive(ByteBuffer data) throws JSONException {
@@ -146,14 +187,14 @@ public class JSONParser {
             throw new JSONException("Cannot receive data after close()");
         }
         
-        buffer.put(data);
-        buffer.flip();
+        if (!data.hasRemaining()) {
+            return;
+        }
         
         // Check for BOM on first chunk
         if (!checkedBom) {
-            if (!checkBom()) {
-                // Need more data to determine BOM
-                buffer.compact();
+            if (!checkBom(data)) {
+                // Need more data to determine BOM - leave buffer as-is
                 return;
             }
             checkedBom = true;
@@ -164,23 +205,8 @@ public class JSONParser {
             tokenizer = new JSONTokenizer(handler);
         }
         
-        // Decode bytes to characters
-        boolean decoded = decodeToCharBuffer();
-        if (!decoded) {
-            // Need more data for complete character sequence
-            buffer.compact();
-            return;
-        }
-        
-        // Process tokens
-        charBuffer.flip(); // Put in read mode for tokenizer
-        tokenizer.receive(charBuffer);
-        
-        // Compact to preserve unconsumed characters
-        charBuffer.compact();
-        
-        // Compact byte buffer to preserve any undecoded bytes
-        buffer.compact();
+        // Decode bytes to characters and process tokens
+        decodeAndProcess(data);
     }
 
     /**
@@ -245,10 +271,6 @@ public class JSONParser {
         checkedBom = false;
         closed = false;
         
-        // Clear buffer
-        buffer.clear();
-        buffer.compact();
-        
         // Clear char buffer
         if (charBuffer != null) {
             charBuffer.clear();
@@ -265,35 +287,36 @@ public class JSONParser {
      * Check for and skip BOM if present.
      * Optimized for UTF-8 (fast path), also detects UTF-16/32 to reject them.
      * Returns false if we need more data to determine if BOM is present.
+     * If BOM is found, it is consumed from the buffer.
      */
-    private boolean checkBom() throws JSONException {
-        int remaining = buffer.remaining();
+    private boolean checkBom(ByteBuffer data) throws JSONException {
+        int remaining = data.remaining();
         
         if (remaining == 0) {
             return false; // Need at least 1 byte
         }
         
         // Use get(int) to peek without consuming
-        int startPos = buffer.position();
-        byte b1 = buffer.get(startPos);
+        int startPos = data.position();
+        byte b1 = data.get(startPos);
         
         // Fast path: UTF-8 BOM (EF BB BF) - most common case
         if (b1 == (byte) 0xEF) {
             if (remaining < 3) {
                 // Might be UTF-8 BOM, need more data
-                if (remaining >= 2 && buffer.get(startPos + 1) == (byte) 0xBB) {
+                if (remaining >= 2 && data.get(startPos + 1) == (byte) 0xBB) {
                     return false; // Partial UTF-8 BOM
                 }
                 if (remaining == 1) {
                     return false; // Could be UTF-8 BOM
                 }
             } else {
-                byte b2 = buffer.get(startPos + 1);
-                byte b3 = buffer.get(startPos + 2);
+                byte b2 = data.get(startPos + 1);
+                byte b3 = data.get(startPos + 2);
                 
                 if (b2 == (byte) 0xBB && b3 == (byte) 0xBF) {
                     // UTF-8 BOM found, skip it
-                    buffer.position(startPos + 3);
+                    data.position(startPos + 3);
                     return true;
                 }
             }
@@ -307,7 +330,7 @@ public class JSONParser {
             if (remaining < 2) {
                 return false; // Need more data
             }
-            if (buffer.get(startPos + 1) == (byte) 0xFF) {
+            if (data.get(startPos + 1) == (byte) 0xFF) {
                 throw new JSONException("UTF-16 BE encoding not supported");
             }
             return true; // Not a BOM
@@ -318,13 +341,13 @@ public class JSONParser {
             if (remaining < 2) {
                 return false; // Need more data
             }
-            if (buffer.get(startPos + 1) == (byte) 0xFE) {
+            if (data.get(startPos + 1) == (byte) 0xFE) {
                 if (remaining < 4) {
                     return false; // Need 4 bytes to distinguish UTF-16 LE from UTF-32 LE
                 }
                 // Check for UTF-32 LE: FF FE 00 00
-                if (buffer.get(startPos + 2) == (byte) 0x00 && 
-                    buffer.get(startPos + 3) == (byte) 0x00) {
+                if (data.get(startPos + 2) == (byte) 0x00 && 
+                    data.get(startPos + 3) == (byte) 0x00) {
                     throw new JSONException("UTF-32 LE encoding not supported");
                 }
                 // UTF-16 LE
@@ -338,12 +361,12 @@ public class JSONParser {
             if (remaining < 2) {
                 return false; // Need more data
             }
-            if (buffer.get(startPos + 1) == (byte) 0x00) {
+            if (data.get(startPos + 1) == (byte) 0x00) {
                 if (remaining < 4) {
                     return false; // Might be UTF-32 BE BOM
                 }
-                if (buffer.get(startPos + 2) == (byte) 0xFE && 
-                    buffer.get(startPos + 3) == (byte) 0xFF) {
+                if (data.get(startPos + 2) == (byte) 0xFE && 
+                    data.get(startPos + 3) == (byte) 0xFF) {
                     throw new JSONException("UTF-32 BE encoding not supported");
                 }
             }
@@ -355,43 +378,49 @@ public class JSONParser {
     }
 
     /**
-     * Decode bytes from buffer to charBuffer.
-     * Returns true if decoding completed, false if need more bytes for complete character.
+     * Maximum CharBuffer size. Processing is done incrementally to avoid
+     * allocating a buffer sized for the entire input.
      */
-    private boolean decodeToCharBuffer() throws JSONException {
-        // Ensure charBuffer exists and has space
-        if (charBuffer == null) {
-            charBuffer = CharBuffer.allocate(Math.max(buffer.remaining(), bufferSize));
-        } else {
-            // charBuffer is in write mode with underflow at start
-            int underflowSize = charBuffer.position();
-            int availableSpace = charBuffer.remaining();
-            int needed = buffer.remaining();
-            
-            if (availableSpace < needed) {
-                // Need to expand - preserve underflow
-                int newCapacity = Math.max(underflowSize + needed + 1024, bufferSize);
-                CharBuffer newBuffer = CharBuffer.allocate(newCapacity);
-                
-                // Copy underflow from old buffer
-                charBuffer.flip(); // switch to read mode
-                newBuffer.put(charBuffer); // copy underflow
-                charBuffer = newBuffer;
-                // charBuffer is now in write mode with underflow copied
-            }
+    private static final int MAX_CHAR_BUFFER = 8192;
+
+    /**
+     * Decode bytes from the input buffer to characters and process tokens.
+     * 
+     * <p>This method follows the pattern from gonzalez XML parser:
+     * <ul>
+     *   <li>ByteBuffer tracks only incomplete multi-byte sequences (handled by CharsetDecoder)</li>
+     *   <li>CharBuffer tracks incomplete tokens (managed via compact/flip)</li>
+     *   <li>No need to map character positions back to byte positions</li>
+     * </ul>
+     */
+    private void decodeAndProcess(ByteBuffer data) throws JSONException {
+        if (!data.hasRemaining()) {
+            return;
         }
         
-        // Decode using CompositeByteBuffer's decode method
-        CoderResult result = buffer.decode(decoder, charBuffer, closed);
+        // Allocate CharBuffer if needed (capped at MAX_CHAR_BUFFER)
+        if (charBuffer == null) {
+            charBuffer = CharBuffer.allocate(Math.min(bufferSize, MAX_CHAR_BUFFER));
+        }
         
-        if (result.isUnderflow()) {
-            // Normal - processed all available bytes (or need more for complete character)
-            return true;
-        } else if (result.isOverflow()) {
-            // CharBuffer full - should not happen with our sizing
-            throw new JSONException("CharBuffer overflow during decoding");
-        } else if (result.isError()) {
-            // Malformed or unmappable input
+        // Ensure charBuffer has space for decoding
+        // charBuffer is in write mode with any unconsumed chars from previous call
+        int unconsumedChars = charBuffer.position();
+        if (charBuffer.remaining() < data.remaining()) {
+            // Need to grow charBuffer
+            int needed = unconsumedChars + data.remaining();
+            int newCapacity = Math.max(needed + 256, charBuffer.capacity() * 2);
+            CharBuffer newBuffer = CharBuffer.allocate(newCapacity);
+            charBuffer.flip();
+            newBuffer.put(charBuffer);
+            charBuffer = newBuffer;
+        }
+        
+        // Decode all available bytes into charBuffer
+        // The decoder leaves incomplete multi-byte sequences in data
+        CoderResult result = decoder.decode(data, charBuffer, closed);
+        
+        if (result.isError()) {
             try {
                 result.throwException();
             } catch (Exception e) {
@@ -399,6 +428,18 @@ public class JSONParser {
             }
         }
         
-        return true;
+        // Flip charBuffer to read mode for tokenizer
+        charBuffer.flip();
+        
+        // Tokenize - tokenizer consumes what it can
+        tokenizer.receive(charBuffer);
+        
+        // Compact to preserve unconsumed characters for next call
+        charBuffer.compact();
+        
+        // Note: If decoder had UNDERFLOW (incomplete multi-byte sequence),
+        // those bytes remain in data for the caller to preserve via compact().
+        // If tokenizer had underflow (incomplete token), those chars are
+        // preserved in charBuffer via the compact() above.
     }
 }

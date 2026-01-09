@@ -7,8 +7,11 @@
   <property name="dist" location="dist"/>
   <property name="lib" location="lib"/>
   <property name="doc" location="doc"/>
-  <property name="release" value="1.1.0"/>
+  <property name="release" value="1.2"/>
   <property name="test" location="test"/>
+  <!-- Minimum Java version for runtime (APIs used require Java 8) -->
+  <property name="java.release.version" value="8"/>
+  <!-- Fallback for JDK 8 builds (source/target used when release attr unavailable) -->
   <property name="java.source.version" value="1.8"/>
   <property name="java.target.version" value="1.8"/>
 
@@ -22,8 +25,17 @@
   </target>
 
   <target name="build" depends="init">
+    <!-- Compile main sources with Java 8 compatibility -->
     <javac debug="true" srcdir="${src}" destdir="${build}"
-           source="${java.source.version}" target="${java.target.version}">
+           release="${java.release.version}"
+           source="${java.source.version}" target="${java.target.version}"
+           includeantruntime="false">
+      <exclude name="module-info.java"/>
+    </javac>
+    <!-- Compile module-info.java separately with Java 9 (for JPMS support) -->
+    <javac debug="true" srcdir="${src}" destdir="${build}"
+           release="9" includeantruntime="false">
+      <include name="module-info.java"/>
     </javac>
   </target>
 
@@ -56,6 +68,7 @@
   <target name='junit-build' depends='build'>
     <mkdir dir='${test}/junit/classes'/>
     <javac srcdir='${test}/junit/src' destdir='${test}/junit/classes' debug='true'
+           release='${java.release.version}'
            source='${java.source.version}' target='${java.target.version}'
            includeantruntime='false'>
       <classpath>

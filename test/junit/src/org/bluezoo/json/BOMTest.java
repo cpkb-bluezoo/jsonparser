@@ -36,6 +36,7 @@ public class BOMTest {
     
     /**
      * Test UTF-8 BOM split across two receive() calls.
+     * Uses proper buffer management with compact/flip lifecycle.
      */
     @Test
     public void testUTF8BOMSplit() throws Exception {
@@ -43,16 +44,26 @@ public class BOMTest {
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         
+        ByteBuffer buffer = ByteBuffer.allocate(64);
+        
         // First chunk: EF BB (incomplete BOM)
-        byte[] chunk1 = new byte[] {(byte)0xEF, (byte)0xBB};
-        parser.receive(ByteBuffer.wrap(chunk1));
+        buffer.put(new byte[] {(byte)0xEF, (byte)0xBB});
+        buffer.flip();
+        parser.receive(buffer);
+        buffer.compact();
         
         // Second chunk: BF (complete BOM) followed by JSON
-        byte[] chunk2 = new byte[] {
-            (byte)0xBF,  // Complete the BOM
-            '[', '4', '2', ']'
-        };
-        parser.receive(ByteBuffer.wrap(chunk2));
+        buffer.put(new byte[] {(byte)0xBF, '[', '4', '2', ']'});
+        buffer.flip();
+        parser.receive(buffer);
+        buffer.compact();
+        
+        // Process any remaining
+        buffer.flip();
+        if (buffer.hasRemaining()) {
+            parser.receive(buffer);
+        }
+        
         parser.close();
         
         assertEquals("Should have parsed one number", 1, handler.numbers.size());
@@ -61,6 +72,7 @@ public class BOMTest {
     
     /**
      * Test UTF-8 BOM split byte-by-byte across three receive() calls.
+     * Uses proper buffer management with compact/flip lifecycle.
      */
     @Test
     public void testUTF8BOMSplitByteByByte() throws Exception {
@@ -68,13 +80,36 @@ public class BOMTest {
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         
-        // Split BOM across three calls
-        parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xEF}));
-        parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xBB}));
-        parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xBF}));
+        ByteBuffer buffer = ByteBuffer.allocate(64);
+        
+        // Split BOM across three calls with proper buffer management
+        buffer.put((byte)0xEF);
+        buffer.flip();
+        parser.receive(buffer);
+        buffer.compact();
+        
+        buffer.put((byte)0xBB);
+        buffer.flip();
+        parser.receive(buffer);
+        buffer.compact();
+        
+        buffer.put((byte)0xBF);
+        buffer.flip();
+        parser.receive(buffer);
+        buffer.compact();
         
         // Then send JSON
-        parser.receive(ByteBuffer.wrap("true".getBytes()));
+        buffer.put("true".getBytes());
+        buffer.flip();
+        parser.receive(buffer);
+        buffer.compact();
+        
+        // Process any remaining
+        buffer.flip();
+        if (buffer.hasRemaining()) {
+            parser.receive(buffer);
+        }
+        
         parser.close();
         
         assertEquals("Should have parsed one boolean", 1, handler.booleans.size());
@@ -127,17 +162,26 @@ public class BOMTest {
     
     /**
      * Test UTF-16 LE BOM split across receive() calls.
+     * Uses proper buffer management with compact/flip lifecycle.
      */
     @Test
     public void testUTF16LEBOMSplit() {
         JSONParser parser = new JSONParser();
         parser.setContentHandler(new TestHandler());
         
+        ByteBuffer buffer = ByteBuffer.allocate(64);
+        
         try {
             // First byte of UTF-16 LE BOM
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xFF}));
-            // Second byte completes the BOM
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xFE, '{', '}'}));
+            buffer.put((byte)0xFF);
+            buffer.flip();
+            parser.receive(buffer);
+            buffer.compact();
+            
+            // Second byte completes the BOM (need 4 bytes to distinguish UTF-16 LE from UTF-32 LE)
+            buffer.put(new byte[] {(byte)0xFE, (byte)0x00, (byte)0x01, '{', '}'});
+            buffer.flip();
+            parser.receive(buffer);
             fail("Should have rejected UTF-16 LE encoding");
         } catch (JSONException e) {
             assertTrue("Should mention UTF-16", e.getMessage().contains("UTF-16"));
@@ -190,19 +234,26 @@ public class BOMTest {
     
     /**
      * Test UTF-32 LE BOM split across multiple receive() calls.
+     * Uses proper buffer management with compact/flip lifecycle.
      */
     @Test
     public void testUTF32LEBOMSplit() {
         JSONParser parser = new JSONParser();
         parser.setContentHandler(new TestHandler());
         
+        ByteBuffer buffer = ByteBuffer.allocate(64);
+        
         try {
             // Send first two bytes
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xFF, (byte)0xFE}));
-            // This looks like UTF-16 LE so far, but need to wait...
+            buffer.put(new byte[] {(byte)0xFF, (byte)0xFE});
+            buffer.flip();
+            parser.receive(buffer);
+            buffer.compact();
             
             // Send next two bytes to complete UTF-32 LE BOM
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0x00, (byte)0x00, '{', '}'}));
+            buffer.put(new byte[] {(byte)0x00, (byte)0x00, '{', '}'});
+            buffer.flip();
+            parser.receive(buffer);
             fail("Should have rejected UTF-32 LE encoding");
         } catch (JSONException e) {
             assertTrue("Should mention UTF-32", e.getMessage().contains("UTF-32"));
@@ -211,17 +262,34 @@ public class BOMTest {
     
     /**
      * Test UTF-32 BE BOM split byte-by-byte.
+     * Uses proper buffer management with compact/flip lifecycle.
      */
     @Test
     public void testUTF32BEBOMSplitByteByByte() {
         JSONParser parser = new JSONParser();
         parser.setContentHandler(new TestHandler());
         
+        ByteBuffer buffer = ByteBuffer.allocate(64);
+        
         try {
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0x00}));
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0x00}));
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xFE}));
-            parser.receive(ByteBuffer.wrap(new byte[] {(byte)0xFF, '{', '}'}));
+            buffer.put((byte)0x00);
+            buffer.flip();
+            parser.receive(buffer);
+            buffer.compact();
+            
+            buffer.put((byte)0x00);
+            buffer.flip();
+            parser.receive(buffer);
+            buffer.compact();
+            
+            buffer.put((byte)0xFE);
+            buffer.flip();
+            parser.receive(buffer);
+            buffer.compact();
+            
+            buffer.put(new byte[] {(byte)0xFF, '{', '}'});
+            buffer.flip();
+            parser.receive(buffer);
             fail("Should have rejected UTF-32 BE encoding");
         } catch (JSONException e) {
             assertTrue("Should mention UTF-32", e.getMessage().contains("UTF-32"));

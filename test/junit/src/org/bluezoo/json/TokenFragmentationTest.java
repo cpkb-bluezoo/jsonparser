@@ -67,7 +67,8 @@ public class TokenFragmentationTest {
     }
     
     /**
-     * Helper to send JSON in fragments of specified size
+     * Helper to send JSON in fragments of specified size.
+     * Uses proper buffer management with compact/flip lifecycle.
      */
     private CaptureHandler parseFragmented(String json, int fragmentSize) throws Exception {
         CaptureHandler handler = new CaptureHandler();
@@ -75,13 +76,28 @@ public class TokenFragmentationTest {
         parser.setContentHandler(handler);
         
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        // Buffer needs space for fragment plus any unconsumed data from previous iteration
+        ByteBuffer buffer = ByteBuffer.allocate(fragmentSize + 256);
         int offset = 0;
         
         while (offset < bytes.length) {
+            // Add next fragment to buffer (after any unconsumed data)
             int len = Math.min(fragmentSize, bytes.length - offset);
-            ByteBuffer chunk = ByteBuffer.wrap(bytes, offset, len);
-            parser.receive(chunk);
+            buffer.put(bytes, offset, len);
             offset += len;
+            
+            // Switch to read mode and parse
+            buffer.flip();
+            parser.receive(buffer);
+            
+            // Preserve any unconsumed bytes
+            buffer.compact();
+        }
+        
+        // Process any remaining data
+        buffer.flip();
+        if (buffer.hasRemaining()) {
+            parser.receive(buffer);
         }
         
         parser.close();
