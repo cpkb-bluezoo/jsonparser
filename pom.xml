@@ -3,8 +3,9 @@
   This POM is for distribution only - it allows the release jar to be
   downloaded from GitHub Packages as a Maven dependency.
   
-  To build the project, use Ant:
-    ant release
+  IMPORTANT: You must run 'ant release' before 'mvn deploy'.
+  Maven does not build the project - it only packages and deploys the
+  Ant-built jar from dist/.
   
   To deploy to GitHub Packages:
     ant release
@@ -70,31 +71,7 @@
                 </executions>
             </plugin>
 
-            <!-- Invoke Ant to build if jar doesn't exist -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
-                <executions>
-                    <execution>
-                        <id>ant-build</id>
-                        <phase>compile</phase>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                        <configuration>
-                            <target>
-                                <condition property="jar.exists">
-                                    <available file="${ant.jar}"/>
-                                </condition>
-                                <ant antfile="build.xml" target="release" unless:set="jar.exists"/>
-                            </target>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Install/deploy the Ant-built jar -->
+            <!-- Install/deploy the Ant-built jar (must run 'ant release' first) -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
