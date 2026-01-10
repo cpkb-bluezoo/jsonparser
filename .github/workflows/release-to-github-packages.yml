@@ -30,7 +30,15 @@ jobs:
         run: ant release
 
       - name: Deploy to GitHub Packages
-        run: mvn deploy -DskipTests
+        run: |
+          mvn deploy:deploy-file \
+            -DgroupId=org.bluezoo \
+            -DartifactId=jsonparser \
+            -Dversion=1.2 \
+            -Dpackaging=jar \
+            -Dfile=dist/jsonparser-1.2.jar \
+            -DrepositoryId=github \
+            -Durl=https://maven.pkg.github.com/cpkb-bluezoo/jsonparser
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
