@@ -16,6 +16,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Extract version from tag
+        id: version
+        run: |
+          # Get version from git tag (strips 'v' prefix if present)
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
@@ -27,16 +35,16 @@ jobs:
           server-password: GITHUB_TOKEN
 
       - name: Build with Ant
-        run: ant release
+        run: ant release -Drelease=${{ steps.version.outputs.version }}
 
       - name: Deploy to GitHub Packages
         run: |
           mvn deploy:deploy-file \
             -DgroupId=org.bluezoo \
             -DartifactId=jsonparser \
-            -Dversion=1.2 \
+            -Dversion=${{ steps.version.outputs.version }} \
             -Dpackaging=jar \
-            -Dfile=dist/jsonparser-1.2.jar \
+            -Dfile=dist/jsonparser-${{ steps.version.outputs.version }}.jar \
             -DrepositoryId=github \
             -Durl=https://maven.pkg.github.com/cpkb-bluezoo/jsonparser
         env:
