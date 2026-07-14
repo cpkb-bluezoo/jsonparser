@@ -2,10 +2,11 @@
 JSON parser and serializer for Java
 
 This is a tiny and efficient JSON parser and serialization library for
-Java. It takes up only 26KB (including the serialisation feature), as
-opposed to object-mapping-based JSON parsers such as GSON (290KB) or
-Jackson (600KB), and is fast and conformant. The streaming parser operates
-in **constant memory** regardless of document size.
+Java. It takes up only 31KB (including the serialisation feature), as
+opposed to object-mapping-based JSON parsers such as GSON (306KB) or
+Jackson (580KB for streaming alone, 2.3MB with object-mapping/databind
+support), and is fast and conformant. The streaming parser operates in
+**constant memory** regardless of document size.
 
 Full JavaDoc documentation is included in the package, see the doc
 subdirectory.
@@ -270,6 +271,18 @@ overall:
 
 See [benchmarks/](benchmarks/README.md) for the full methodology and how
 to reproduce these figures yourself.
+
+Size matters too - a smaller jar means less to download, less to load,
+and less attack surface. Here's how the benchmarked libraries compare:
+
+| Library | Jar(s) | Size |
+|---|---|---|
+| jsonparser 1.3 | jsonparser | 31 KB |
+| minimal-json 0.9.5 | minimal-json | 33 KB |
+| org.json 20260522 | json | 87 KB |
+| Gson 2.14.0 | gson | 306 KB |
+| Jackson 2.22 (streaming only) | jackson-core | 580 KB |
+| Jackson 2.22 (with databind) | jackson-core + jackson-databind + jackson-annotations | 2.3 MB |
 
 ## Maven integration
 
