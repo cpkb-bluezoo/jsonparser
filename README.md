@@ -301,7 +301,7 @@ so, add the following elements to your project's pom.xml:
     <dependency>
         <groupId>com.github.cpkb-bluezoo</groupId>
         <artifactId>jsonparser</artifactId>
-        <version>1.2</version>
+        <version>1.3</version>
     </dependency>
 </dependencies>
 ```
