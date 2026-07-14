@@ -147,6 +147,7 @@ public class JSONTestSuiteTest {
      */
     private void parseFile(File file) throws Exception {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         
         // Use a simple content handler that just receives events
         // We're only testing whether parsing succeeds or fails

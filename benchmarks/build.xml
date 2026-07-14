@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="jsonparser-benchmarks" default="bench" basedir=".">
+
+  <description>
+    Performance comparison of org.bluezoo.json (jsonparser) against other
+    Java JSON libraries (Gson, Jackson, org.json, minimal-json) across a
+    corpus of JSON documents of varying size and character.
+
+    This module is entirely self-contained: it does not affect the build,
+    tests, or distribution of the main jsonparser library. All downloaded
+    dependencies and generated corpus files live under this directory.
+  </description>
+
+  <property name="lib" location="lib"/>
+  <property name="src" location="src"/>
+  <property name="build" location="build"/>
+  <property name="corpus" location="corpus"/>
+  <property name="corpus.real" location="${corpus}/real"/>
+  <property name="corpus.generated" location="${corpus}/generated"/>
+  <property name="results" location="results"/>
+
+  <!-- The jsonparser jar under test: built by the main project's Ant build -->
+  <property name="jsonparser.version" value="1.3"/>
+  <property name="jsonparser.jar" location="../dist/jsonparser-${jsonparser.version}.jar"/>
+
+  <!-- Competitor library versions -->
+  <property name="gson.version" value="2.14.0"/>
+  <property name="jackson.version" value="2.22.1"/>
+  <property name="jackson.annotations.version" value="2.22"/>
+  <property name="orgjson.version" value="20260522"/>
+  <property name="minimaljson.version" value="0.9.5"/>
+
+  <property name="maven.central" value="https://repo1.maven.org/maven2"/>
+
+  <path id="classpath">
+    <fileset dir="${lib}" includes="*.jar"/>
+    <pathelement location="${jsonparser.jar}"/>
+  </path>
+
+  <!-- ================================================================ -->
+  <!-- Git commit identification                                         -->
+  <!-- ================================================================ -->
+
+  <!-- Tags results.csv with the commit the jsonparser library (src/) was
+       built from, so results from different commits can be told apart and
+       compared. Appends "-dirty" if src/ has uncommitted changes, since in
+       that case the built jar doesn't correspond to any committed state. -->
+  <target name="git-info">
+    <exec executable="git" dir="${basedir}/.." outputproperty="git.sha" failonerror="false">
+      <arg value="rev-parse"/>
+      <arg value="--short"/>
+      <arg value="HEAD"/>
+    </exec>
+    <property name="git.sha" value="unknown"/>
+    <exec executable="git" dir="${basedir}/.." outputproperty="git.status.src" failonerror="false">
+      <arg value="status"/>
+      <arg value="--porcelain"/>
+      <arg value="--"/>
+      <arg value="src"/>
+    </exec>
+    <condition property="git.dirty">
+      <and>
+        <isset property="git.status.src"/>
+        <length string="${git.status.src}" when="greater" length="0"/>
+      </and>
+    </condition>
+    <condition property="git.suffix" value="${git.sha}-dirty" else="${git.sha}">
+      <isset property="git.dirty"/>
+    </condition>
+    <!-- Results file for the current commit; override with -Dbench.csv=... to
+         target a specific past commit's results, e.g. for "ant report" -->
+    <property name="bench.csv" value="${results}/results-${git.suffix}.csv"/>
+  </target>
+
+  <!-- ================================================================ -->
+  <!-- Dependency fetching                                               -->
+  <!-- ================================================================ -->
+
+  <target name="fetch-deps" description="Download competitor library jars from Maven Central">
+    <mkdir dir="${lib}"/>
+    <get skipexisting="true" verbose="true"
+         src="${maven.central}/com/google/code/gson/gson/${gson.version}/gson-${gson.version}.jar"
+         dest="${lib}/gson-${gson.version}.jar"/>
+    <get skipexisting="true" verbose="true"
+         src="${maven.central}/com/fasterxml/jackson/core/jackson-core/${jackson.version}/jackson-core-${jackson.version}.jar"
+         dest="${lib}/jackson-core-${jackson.version}.jar"/>
+    <get skipexisting="true" verbose="true"
+         src="${maven.central}/com/fasterxml/jackson/core/jackson-databind/${jackson.version}/jackson-databind-${jackson.version}.jar"
+         dest="${lib}/jackson-databind-${jackson.version}.jar"/>
+    <get skipexisting="true" verbose="true"
+         src="${maven.central}/com/fasterxml/jackson/core/jackson-annotations/${jackson.annotations.version}/jackson-annotations-${jackson.annotations.version}.jar"
+         dest="${lib}/jackson-annotations-${jackson.annotations.version}.jar"/>
+    <get skipexisting="true" verbose="true"
+         src="${maven.central}/org/json/json/${orgjson.version}/json-${orgjson.version}.jar"
+         dest="${lib}/json-${orgjson.version}.jar"/>
+    <get skipexisting="true" verbose="true"
+         src="${maven.central}/com/eclipsesource/minimal-json/minimal-json/${minimaljson.version}/minimal-json-${minimaljson.version}.jar"
+         dest="${lib}/minimal-json-${minimaljson.version}.jar"/>
+  </target>
+
+  <!-- Well-known real-world JSON corpus files used by the nativejson-benchmark
+       project (https://github.com/miloyip/nativejson-benchmark, MIT licensed
+       data) - these give realistic, varied, non-synthetic documents. -->
+  <target name="fetch-corpus" description="Download real-world benchmark corpus files">
+    <mkdir dir="${corpus.real}"/>
+    <property name="njb.base"
+      value="https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/data"/>
+    <get skipexisting="true" verbose="true" src="${njb.base}/canada.json" dest="${corpus.real}/canada.json"/>
+    <get skipexisting="true" verbose="true" src="${njb.base}/citm_catalog.json" dest="${corpus.real}/citm_catalog.json"/>
+    <get skipexisting="true" verbose="true" src="${njb.base}/twitter.json" dest="${corpus.real}/twitter.json"/>
+  </target>
+
+  <!-- ================================================================ -->
+  <!-- Compilation                                                       -->
+  <!-- ================================================================ -->
+
+  <target name="init">
+    <available file="${jsonparser.jar}" property="jsonparser.jar.present"/>
+    <fail unless="jsonparser.jar.present">
+      The jsonparser library jar is not built yet: ${jsonparser.jar}
+      Run 'ant release' in the project root first.
+    </fail>
+    <mkdir dir="${build}"/>
+  </target>
+
+  <target name="build" depends="init, fetch-deps" description="Compile benchmark harness">
+    <javac debug="true" srcdir="${src}" destdir="${build}"
+           includeantruntime="false" release="17">
+      <classpath refid="classpath"/>
+    </javac>
+  </target>
+
+  <!-- ================================================================ -->
+  <!-- Corpus generation                                                 -->
+  <!-- ================================================================ -->
+
+  <target name="gen-corpus" depends="build" description="Generate synthetic corpus files">
+    <mkdir dir="${corpus.generated}"/>
+    <java classname="org.bluezoo.json.bench.CorpusGenerator" fork="true" failonerror="true">
+      <classpath>
+        <path refid="classpath"/>
+        <pathelement location="${build}"/>
+      </classpath>
+      <arg value="${corpus.generated}"/>
+    </java>
+  </target>
+
+  <!-- ================================================================ -->
+  <!-- Benchmark execution                                               -->
+  <!-- ================================================================ -->
+
+  <!-- Number of measured iterations per (library, mode, file) combination -->
+  <property name="bench.iterations" value="30"/>
+  <property name="bench.warmup" value="15"/>
+
+  <target name="bench" depends="build, gen-corpus, fetch-corpus, git-info"
+          description="Run the full benchmark suite (forks a child JVM per test for isolation)">
+    <mkdir dir="${results}"/>
+    <echo message="Benchmarking commit ${git.suffix} -&gt; ${bench.csv}"/>
+    <java classname="org.bluezoo.json.bench.Bench" fork="true" failonerror="true"
+          maxmemory="512m">
+      <classpath>
+        <path refid="classpath"/>
+        <pathelement location="${build}"/>
+      </classpath>
+      <sysproperty key="bench.lib.dir" value="${lib}"/>
+      <sysproperty key="bench.jsonparser.jar" value="${jsonparser.jar}"/>
+      <sysproperty key="bench.build.dir" value="${build}"/>
+      <sysproperty key="bench.java.home" value="${java.home}"/>
+      <arg value="${corpus.real}"/>
+      <arg value="${corpus.generated}"/>
+      <arg value="${bench.csv}"/>
+      <arg value="${bench.warmup}"/>
+      <arg value="${bench.iterations}"/>
+    </java>
+  </target>
+
+  <target name="report" depends="git-info"
+          description="Print a formatted comparison report. Defaults to the current commit's results; override with -Dbench.csv=results/results-&lt;sha&gt;.csv to view another commit's run">
+    <available file="${bench.csv}" property="bench.csv.present"/>
+    <fail unless="bench.csv.present">
+      No results file at ${bench.csv} - run 'ant bench' first, or pass
+      -Dbench.csv=results/results-&lt;sha&gt;.csv to view a different commit's results.
+    </fail>
+    <java classname="org.bluezoo.json.bench.Report" fork="true" failonerror="true">
+      <classpath>
+        <path refid="classpath"/>
+        <pathelement location="${build}"/>
+      </classpath>
+      <arg value="${bench.csv}"/>
+    </java>
+  </target>
+
+  <target name="clean" description="Remove compiled classes and results (keeps downloaded deps/corpus)">
+    <delete dir="${build}"/>
+  </target>
+
+  <target name="distclean" depends="clean" description="Also remove downloaded jars, corpus and results">
+    <delete dir="${lib}"/>
+    <delete dir="${corpus.real}"/>
+    <delete dir="${corpus.generated}"/>
+    <delete dir="${results}"/>
+  </target>
+
+</project>

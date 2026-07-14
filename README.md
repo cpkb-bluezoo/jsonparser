@@ -258,6 +258,19 @@ The parser has been tested with
 [JSONTestSuite](https://github.com/nst/JSONTestSuite) and is fully
 conformant with that test suite.
 
+## Performance
+
+jsonparser is benchmarked against Gson, Jackson, org.json, and minimal-json
+across a corpus of JSON documents varying in size, character set (ASCII vs
+full Unicode), and content shape (number-heavy, string-heavy, deeply
+nested, wide flat objects, and real-world files). It comes out fastest
+overall:
+
+![Benchmark comparison: total parse time across a varied JSON corpus, by library and mode - smaller is better](benchmarks/benchmark-comparison.svg)
+
+See [benchmarks/](benchmarks/README.md) for the full methodology and how
+to reproduce these figures yourself.
+
 ## Maven integration
 
 You can incorporate this project directly into your Maven project. To do

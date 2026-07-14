@@ -16,6 +16,7 @@ public class BOMTest {
     @Test
     public void testUTF8BOM() throws Exception {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         
@@ -41,6 +42,7 @@ public class BOMTest {
     @Test
     public void testUTF8BOMSplit() throws Exception {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         
@@ -77,6 +79,7 @@ public class BOMTest {
     @Test
     public void testUTF8BOMSplitByteByByte() throws Exception {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         
@@ -122,6 +125,7 @@ public class BOMTest {
     @Test
     public void testUTF16LEBOM() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         byte[] data = new byte[] {
@@ -144,6 +148,7 @@ public class BOMTest {
     @Test
     public void testUTF16BEBOM() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         byte[] data = new byte[] {
@@ -167,6 +172,7 @@ public class BOMTest {
     @Test
     public void testUTF16LEBOMSplit() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         ByteBuffer buffer = ByteBuffer.allocate(64);
@@ -194,6 +200,7 @@ public class BOMTest {
     @Test
     public void testUTF32LEBOM() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         byte[] data = new byte[] {
@@ -216,6 +223,7 @@ public class BOMTest {
     @Test
     public void testUTF32BEBOM() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         byte[] data = new byte[] {
@@ -239,6 +247,7 @@ public class BOMTest {
     @Test
     public void testUTF32LEBOMSplit() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         ByteBuffer buffer = ByteBuffer.allocate(64);
@@ -267,6 +276,7 @@ public class BOMTest {
     @Test
     public void testUTF32BEBOMSplitByteByByte() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         ByteBuffer buffer = ByteBuffer.allocate(64);
@@ -302,6 +312,7 @@ public class BOMTest {
     @Test
     public void testNoBOM() throws Exception {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         
@@ -317,6 +328,7 @@ public class BOMTest {
     @Test
     public void testNoBOMWithReset() throws Exception {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         TestHandler handler = new TestHandler();
         parser.setContentHandler(handler);
         

@@ -1,1 +1,1 @@
-moduleSearchIndex = [{"l":"org.bluezoo.json"}]
+moduleSearchIndex = [{"l":"org.bluezoo.json"}];updateSearchResults();

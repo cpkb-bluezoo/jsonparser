@@ -2,3 +2,5 @@
 build
 dist
 .DS_Store
+test/junit/classes/
+test/junit/results/

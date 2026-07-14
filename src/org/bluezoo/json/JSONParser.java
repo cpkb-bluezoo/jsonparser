@@ -3,10 +3,6 @@ package org.bluezoo.json;
 import java.io.InputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.nio.charset.CharsetDecoder;
-import java.nio.charset.CoderResult;
-import java.nio.charset.StandardCharsets;
 
 /**
  * A streaming JSON parser using the push (receive) model.
@@ -22,8 +18,10 @@ import java.nio.charset.StandardCharsets;
  * is also provided which internally delegates to the streaming API.
  * <p>
  * Parsing events are delivered via {@link JSONContentHandler} as tokens
- * are recognized. The parser handles byte-to-character decoding and BOM detection,
- * then delegates tokenization to {@link JSONTokenizer}.
+ * are recognized. The parser handles BOM detection, then delegates directly
+ * to {@link JSONTokenizer}, which tokenizes against the raw bytes - UTF-8
+ * decoding only ever happens for the actual content of a string value/key,
+ * never for structural characters, whitespace, numbers, or literals.
  *
  * <h3>Buffer Management Contract</h3>
  * <p>This parser follows the standard non-blocking streaming contract:
@@ -70,13 +68,41 @@ public class JSONParser {
 
     private JSONContentHandler handler;
     private JSONTokenizer tokenizer;
-    private CharsetDecoder decoder;
-    private CharBuffer charBuffer;
     private final int bufferSize;
-    
+
     // Stream state
     private boolean checkedBom;
     private boolean closed;
+
+    // Carries forward whatever bytes were left unconsumed (an incomplete
+    // trailing token) at the end of the most recent receive() call. This is
+    // needed because receive() may be called with an entirely fresh,
+    // non-overlapping ByteBuffer each time (not just the same buffer
+    // compacted and refilled) - the parser, not the caller, is responsible
+    // for remembering a partial token across calls. It also lets close()
+    // (which takes no buffer argument) hand any final leftover bytes to the
+    // tokenizer one more time with its closed flag set, to finalize a bare
+    // trailing token such as "42" with no following delimiter.
+    // In write mode between calls: position is the number of leftover
+    // bytes already stored, limit is capacity.
+    private ByteBuffer pending;
+
+    // Hash-first key interning table (see KeySymbolTable) - created once and
+    // reused across every JSONTokenizer this parser creates, so it stays
+    // warm across multiple documents parsed via reset().
+    private final KeySymbolTable keySymbolTable = new KeySymbolTable();
+
+    // Opt-in strict duplicate-key detection - off by default, zero behavior
+    // change unless explicitly enabled. See setRejectDuplicateKeys.
+    private boolean rejectDuplicateKeys;
+
+    // Resource-exhaustion guard limits (see ParserLimits) - on by default,
+    // with industry-standard values (matching Jackson's StreamReadConstraints).
+    private final ParserLimits limits = new ParserLimits();
+
+    // Cumulative bytes received for the current document (reset() clears
+    // this), checked against limits.maxDocumentLength.
+    private long documentLength;
 
     /**
      * Creates a new JSON parser with a default buffer size of 8KB.
@@ -95,7 +121,6 @@ public class JSONParser {
             throw new IllegalArgumentException("Buffer size must be positive");
         }
         this.bufferSize = bufferSize;
-        this.decoder = StandardCharsets.UTF_8.newDecoder();
     }
 
     /**
@@ -105,6 +130,110 @@ public class JSONParser {
      */
     public void setContentHandler(JSONContentHandler handler) {
         this.handler = handler;
+    }
+
+    /**
+     * Sets whether a repeated key within the same object should be treated
+     * as a parse error. Off by default: RFC 8259 does not mandate unique
+     * object keys, and checking for duplicates has a (small) performance
+     * cost, so this is opt-in rather than automatic.
+     * <p>
+     * Worth enabling wherever the parsed data crosses a trust boundary:
+     * different systems (or different libraries) can disagree about which
+     * of two duplicate keys "wins," which is a known class of vulnerability
+     * (JSON key-confusion/smuggling) when the same payload is interpreted
+     * differently by two components.
+     * <p>
+     * Takes effect from the next document onward (i.e. the next {@link #parse}
+     * call, or the next {@link #reset()} followed by {@link #receive}) -
+     * changing it mid-document has no effect on a tokenizer already created
+     * for that document.
+     *
+     * @param rejectDuplicateKeys true to throw a JSONException on a repeated
+     *        key within the same object
+     */
+    public void setRejectDuplicateKeys(boolean rejectDuplicateKeys) {
+        this.rejectDuplicateKeys = rejectDuplicateKeys;
+    }
+
+    /**
+     * Sets the maximum object/array nesting depth. Guards against stack/
+     * memory exhaustion from a maliciously or accidentally deeply nested
+     * document. Default 1000 (matches Jackson's {@code StreamReadConstraints}
+     * default). A value {@code <= 0} disables this check.
+     *
+     * @param maxNestingDepth the maximum nesting depth, or {@code <= 0} to disable
+     */
+    public void setMaxNestingDepth(int maxNestingDepth) {
+        limits.maxNestingDepth = maxNestingDepth;
+    }
+
+    /**
+     * Sets the maximum number of characters in a single number token.
+     * Guards against the CPU/memory cost of converting a pathologically
+     * long digit sequence to a {@code BigInteger}/{@code double}. Default
+     * 1000 (matches Jackson). A value {@code <= 0} disables this check.
+     *
+     * @param maxNumberLength the maximum number token length, or {@code <= 0} to disable
+     */
+    public void setMaxNumberLength(int maxNumberLength) {
+        limits.maxNumberLength = maxNumberLength;
+    }
+
+    /**
+     * Sets the maximum number of characters in a single string value.
+     * Guards against a huge single-string memory allocation. Default
+     * 20,000,000 (matches Jackson). A value {@code <= 0} disables this check.
+     *
+     * @param maxStringLength the maximum string length, or {@code <= 0} to disable
+     */
+    public void setMaxStringLength(int maxStringLength) {
+        limits.maxStringLength = maxStringLength;
+    }
+
+    /**
+     * Sets the maximum number of characters in a single object key. Default
+     * 50,000 (matches Jackson). A value {@code <= 0} disables this check.
+     *
+     * @param maxNameLength the maximum key length, or {@code <= 0} to disable
+     */
+    public void setMaxNameLength(int maxNameLength) {
+        limits.maxNameLength = maxNameLength;
+    }
+
+    /**
+     * Sets the maximum total number of bytes in one document. Unlimited
+     * (0) by default - matches Jackson, which also leaves this off by
+     * default since it's very application-specific. A value {@code <= 0}
+     * disables this check.
+     *
+     * @param maxDocumentLength the maximum document size in bytes, or {@code <= 0} to disable
+     */
+    public void setMaxDocumentLength(long maxDocumentLength) {
+        limits.maxDocumentLength = maxDocumentLength;
+    }
+
+    /**
+     * Sets the maximum total number of tokens in one document. Guards
+     * against a huge flat array/object (many small elements) that would
+     * otherwise slip past the other limits. Unlimited (0) by default -
+     * matches Jackson. A value {@code <= 0} disables this check.
+     *
+     * @param maxTokenCount the maximum token count, or {@code <= 0} to disable
+     */
+    public void setMaxTokenCount(long maxTokenCount) {
+        limits.maxTokenCount = maxTokenCount;
+    }
+
+    /**
+     * Disables every configurable limit (nesting depth, number/string/key
+     * length, document length, token count) in one call. Intended for
+     * trusted input and for internal testing/benchmarking, where the
+     * industry-standard defaults would otherwise be unnecessarily
+     * restrictive rather than protective.
+     */
+    public void disableAllLimits() {
+        limits.disableAll();
     }
 
     /**
@@ -186,27 +315,93 @@ public class JSONParser {
         if (closed) {
             throw new JSONException("Cannot receive data after close()");
         }
-        
+
         if (!data.hasRemaining()) {
             return;
         }
-        
+
+        if (limits.maxDocumentLength > 0) {
+            documentLength += data.remaining();
+            if (documentLength > limits.maxDocumentLength) {
+                throw new JSONException("Maximum document length exceeded: " + limits.maxDocumentLength);
+            }
+        }
+
+        // If a previous call left an incomplete token's worth of bytes
+        // uncarried, prepend them so the tokenizer sees the token from its
+        // true start. Common case (nothing pending) is zero-copy.
+        ByteBuffer toProcess = mergeWithPending(data);
+
         // Check for BOM on first chunk
         if (!checkedBom) {
-            if (!checkBom(data)) {
-                // Need more data to determine BOM - leave buffer as-is
+            if (!checkBom(toProcess)) {
+                // Need more data to determine BOM - carry forward and wait
+                savePending(toProcess);
                 return;
             }
             checkedBom = true;
         }
-        
+
         // Create tokenizer if needed
         if (tokenizer == null) {
-            tokenizer = new JSONTokenizer(handler);
+            tokenizer = new JSONTokenizer(handler, keySymbolTable, rejectDuplicateKeys, limits);
         }
-        
-        // Decode bytes to characters and process tokens
-        decodeAndProcess(data);
+
+        // Tokenize directly against the raw bytes - no decode step for
+        // structural characters, whitespace, numbers, or literals; see
+        // JSONTokenizer for the UTF-8 self-synchronization property this
+        // relies on.
+        tokenizer.receive(toProcess);
+
+        savePending(toProcess);
+    }
+
+    /**
+     * If {@link #pending} holds carried-over bytes from a previous call,
+     * appends {@code data} to it and returns it (in read mode); otherwise
+     * returns {@code data} unchanged (the common, zero-copy case).
+     */
+    private ByteBuffer mergeWithPending(ByteBuffer data) {
+        if (pending == null || pending.position() == 0) {
+            return data;
+        }
+        int needed = pending.position() + data.remaining();
+        if (pending.capacity() < needed) {
+            ByteBuffer bigger = ByteBuffer.allocate(Math.max(needed + 256, pending.capacity() * 2));
+            pending.flip();
+            bigger.put(pending);
+            pending = bigger;
+        }
+        pending.put(data);
+        pending.flip();
+        return pending;
+    }
+
+    /**
+     * Carries forward whatever remains unconsumed in {@code toProcess} (an
+     * incomplete trailing token) into {@link #pending}, ready to be
+     * prepended by the next call to {@link #mergeWithPending}.
+     */
+    private void savePending(ByteBuffer toProcess) {
+        if (!toProcess.hasRemaining()) {
+            if (toProcess == pending) {
+                pending.clear();
+            }
+            return;
+        }
+        if (toProcess == pending) {
+            // Already our own buffer - shift the unread remainder to the
+            // front and return to write mode for the next append.
+            pending.compact();
+        } else {
+            int remaining = toProcess.remaining();
+            if (pending == null || pending.capacity() < remaining) {
+                pending = ByteBuffer.allocate(Math.max(remaining + 256, bufferSize));
+            } else {
+                pending.clear();
+            }
+            pending.put(toProcess);
+        }
     }
 
     /**
@@ -234,18 +429,19 @@ public class JSONParser {
         }
         
         tokenizer.setClosed(true);
-        
-        // Process any remaining characters in charBuffer with closed flag set
-        if (charBuffer != null && charBuffer.position() > 0) {
-            charBuffer.flip();
-            tokenizer.receive(charBuffer);
-            
-            // After processing, check if anything is still left unparsed
-            if (charBuffer.hasRemaining()) {
+
+        // Re-present any leftover incomplete-token bytes now that the
+        // tokenizer knows no more data is coming (e.g. finalizes a bare
+        // trailing number like "42" with no following delimiter).
+        if (pending != null && pending.position() > 0) {
+            pending.flip();
+            tokenizer.receive(pending);
+
+            if (pending.hasRemaining()) {
                 throw new JSONException("Unclosed string or incomplete token at end of input");
             }
         }
-        
+
         // Check tokenizer state for structural issues
         if (!tokenizer.seenAnyToken) {
             throw new JSONException("No data");
@@ -270,17 +466,13 @@ public class JSONParser {
     public void reset() {
         checkedBom = false;
         closed = false;
-        
-        // Clear char buffer
-        if (charBuffer != null) {
-            charBuffer.clear();
+        documentLength = 0;
+        if (pending != null) {
+            pending.clear();
         }
-        
+
         // Clear tokenizer
         tokenizer = null;
-        
-        // Reset decoder
-        decoder.reset();
     }
 
     /**
@@ -377,69 +569,4 @@ public class JSONParser {
         return true;
     }
 
-    /**
-     * Maximum CharBuffer size. Processing is done incrementally to avoid
-     * allocating a buffer sized for the entire input.
-     */
-    private static final int MAX_CHAR_BUFFER = 8192;
-
-    /**
-     * Decode bytes from the input buffer to characters and process tokens.
-     * 
-     * <p>This method follows the pattern from gonzalez XML parser:
-     * <ul>
-     *   <li>ByteBuffer tracks only incomplete multi-byte sequences (handled by CharsetDecoder)</li>
-     *   <li>CharBuffer tracks incomplete tokens (managed via compact/flip)</li>
-     *   <li>No need to map character positions back to byte positions</li>
-     * </ul>
-     */
-    private void decodeAndProcess(ByteBuffer data) throws JSONException {
-        if (!data.hasRemaining()) {
-            return;
-        }
-        
-        // Allocate CharBuffer if needed (capped at MAX_CHAR_BUFFER)
-        if (charBuffer == null) {
-            charBuffer = CharBuffer.allocate(Math.min(bufferSize, MAX_CHAR_BUFFER));
-        }
-        
-        // Ensure charBuffer has space for decoding
-        // charBuffer is in write mode with any unconsumed chars from previous call
-        int unconsumedChars = charBuffer.position();
-        if (charBuffer.remaining() < data.remaining()) {
-            // Need to grow charBuffer
-            int needed = unconsumedChars + data.remaining();
-            int newCapacity = Math.max(needed + 256, charBuffer.capacity() * 2);
-            CharBuffer newBuffer = CharBuffer.allocate(newCapacity);
-            charBuffer.flip();
-            newBuffer.put(charBuffer);
-            charBuffer = newBuffer;
-        }
-        
-        // Decode all available bytes into charBuffer
-        // The decoder leaves incomplete multi-byte sequences in data
-        CoderResult result = decoder.decode(data, charBuffer, closed);
-        
-        if (result.isError()) {
-            try {
-                result.throwException();
-            } catch (Exception e) {
-                throw new JSONException("Character decoding error", e);
-            }
-        }
-        
-        // Flip charBuffer to read mode for tokenizer
-        charBuffer.flip();
-        
-        // Tokenize - tokenizer consumes what it can
-        tokenizer.receive(charBuffer);
-        
-        // Compact to preserve unconsumed characters for next call
-        charBuffer.compact();
-        
-        // Note: If decoder had UNDERFLOW (incomplete multi-byte sequence),
-        // those bytes remain in data for the caller to preserve via compact().
-        // If tokenizer had underflow (incomplete token), those chars are
-        // preserved in charBuffer via the compact() above.
-    }
 }

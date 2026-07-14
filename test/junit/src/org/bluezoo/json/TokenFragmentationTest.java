@@ -73,6 +73,7 @@ public class TokenFragmentationTest {
     private CaptureHandler parseFragmented(String json, int fragmentSize) throws Exception {
         CaptureHandler handler = new CaptureHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);

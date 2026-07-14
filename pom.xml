@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  This POM is for distribution only - it allows the release jar to be
-  downloaded from GitHub Packages as a Maven dependency.
-  
-  IMPORTANT: You must run 'ant release' before 'mvn deploy'.
-  Maven does not build the project - it only packages and deploys the
-  Ant-built jar from dist/.
-  
-  To deploy to GitHub Packages:
-    ant release
-    mvn deploy
+  This POM declares Maven coordinates only, for the release jar published to
+  GitHub Packages as org.bluezoo:jsonparser. It performs no build or deploy
+  action of its own - Ant (build.xml) is the sole build tool for this
+  project. Publishing is a standalone `mvn deploy:deploy-file` invocation
+  (see .github/workflows/release-to-github-packages.yml) that uploads the
+  already-built jar from dist/ directly, with coordinates and repository
+  passed on the command line - independent of anything declared here.
+
+  packaging is "pom" (not "jar") specifically so that no default Maven
+  lifecycle phase (compile/test/package/etc.) has anything bound to it -
+  there is nothing here for `mvn` to build.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -18,8 +19,8 @@
 
     <groupId>org.bluezoo</groupId>
     <artifactId>jsonparser</artifactId>
-    <version>1.2</version>
-    <packaging>jar</packaging>
+    <version>1.3</version>
+    <packaging>pom</packaging>
 
     <name>JSON Library</name>
     <description>A simple JSON parsing library.</description>
@@ -31,122 +32,5 @@
             <distribution>repo</distribution>
         </license>
     </licenses>
-
-    <properties>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- The Ant-built jar to deploy -->
-        <ant.jar>${basedir}/dist/jsonparser-${project.version}.jar</ant.jar>
-    </properties>
-
-    <build>
-        <plugins>
-
-            <!-- Skip default compilation - Ant handles this -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <executions>
-                    <execution>
-                        <id>default-compile</id>
-                        <phase>none</phase>
-                    </execution>
-                    <execution>
-                        <id>default-testCompile</id>
-                        <phase>none</phase>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Skip default jar creation - use Ant-built jar -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <version>3.3.0</version>
-                <executions>
-                    <execution>
-                        <id>default-jar</id>
-                        <phase>none</phase>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Install/deploy the Ant-built jar (must run 'ant release' first) -->
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>build-helper-maven-plugin</artifactId>
-                <version>3.4.0</version>
-                <executions>
-                    <execution>
-                        <id>attach-artifact</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>attach-artifact</goal>
-                        </goals>
-                        <configuration>
-                            <artifacts>
-                                <artifact>
-                                    <file>${ant.jar}</file>
-                                    <type>jar</type>
-                                </artifact>
-                            </artifacts>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Attach sources jar -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.0</version>
-                <executions>
-                    <execution>
-                        <id>attach-sources</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>jar-no-fork</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Attach javadoc jar -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.6.0</version>
-                <configuration>
-                    <sourcepath>${basedir}/src</sourcepath>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>attach-javadocs</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Deploy to GitHub Packages -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-deploy-plugin</artifactId>
-                <version>3.1.1</version>
-            </plugin>
-
-        </plugins>
-    </build>
-
-    <!-- Deploy as Maven repository -->
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/cpkb-bluezoo/jsonparser</url>
-        </repository>
-    </distributionManagement>
 
 </project>

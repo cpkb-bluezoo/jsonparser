@@ -19,6 +19,7 @@ public class EscapeSequenceTest {
         final String[] result = new String[1];
         
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new JSONDefaultHandler() {
             @Override
             public void stringValue(String value) {

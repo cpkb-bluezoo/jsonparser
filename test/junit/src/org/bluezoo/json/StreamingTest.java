@@ -21,6 +21,7 @@ public class StreamingTest {
     public void testChunkedObject() throws Exception {
         TestHandler handler = new TestHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         // Send JSON in small chunks to test buffering
@@ -49,6 +50,7 @@ public class StreamingTest {
     public void testSplitString() throws Exception {
         TestHandler handler = new TestHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         // Split in the middle of a string value
@@ -67,6 +69,7 @@ public class StreamingTest {
     public void testSplitNumber() throws Exception {
         TestHandler handler = new TestHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         // Split in the middle of a number
@@ -85,6 +88,7 @@ public class StreamingTest {
     public void testSplitEscapeSequence() throws Exception {
         TestHandler handler = new TestHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         // Split in the middle of \n escape
@@ -103,6 +107,7 @@ public class StreamingTest {
     public void testSplitUnicodeEscape() throws Exception {
         TestHandler handler = new TestHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         // Split in the middle of \u0041 (A)
@@ -120,6 +125,7 @@ public class StreamingTest {
     @Test
     public void testUnclosedStringAtEOF() {
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(new TestHandler());
         
         try {
@@ -138,6 +144,7 @@ public class StreamingTest {
     public void testByteByByteParsing() throws Exception {
         TestHandler handler = new TestHandler();
         JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
         parser.setContentHandler(handler);
         
         String json = "{\"x\":42}";
