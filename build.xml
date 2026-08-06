@@ -49,9 +49,23 @@
     <jar jarfile="${dist}/jsonparser-${release}.jar" basedir="${build}"/>
   </target>
 
+  <!-- Sources jar for Maven Central (required alongside the main jar) -->
+  <target name="release-sources">
+    <mkdir dir="${dist}"/>
+    <jar jarfile="${dist}/jsonparser-${release}-sources.jar" basedir="${src}">
+      <exclude name="module-info.java"/>
+    </jar>
+  </target>
+
   <target name="javadoc" depends="build">
     <mkdir dir="${doc}"/>
     <javadoc sourcepath="${src}" destdir="${doc}"/>
+  </target>
+
+  <!-- Javadoc jar for Maven Central (required alongside the main jar) -->
+  <target name="release-javadoc" depends="javadoc">
+    <mkdir dir="${dist}"/>
+    <jar jarfile="${dist}/jsonparser-${release}-javadoc.jar" basedir="${doc}"/>
   </target>
 
   <target name="clean">

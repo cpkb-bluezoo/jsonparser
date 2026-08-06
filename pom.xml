@@ -1,16 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  This POM declares Maven coordinates only, for the release jar published to
-  GitHub Packages as org.bluezoo:jsonparser. It performs no build or deploy
-  action of its own - Ant (build.xml) is the sole build tool for this
-  project. Publishing is a standalone `mvn deploy:deploy-file` invocation
-  (see .github/workflows/release-to-github-packages.yml) that uploads the
-  already-built jar from dist/ directly, with coordinates and repository
-  passed on the command line - independent of anything declared here.
-
-  packaging is "pom" (not "jar") specifically so that no default Maven
-  lifecycle phase (compile/test/package/etc.) has anything bound to it -
-  there is nothing here for `mvn` to build.
+  This POM declares Maven coordinates and the metadata Maven Central's
+  Publisher API validates (name/description/url/licenses/developers/scm) -
+  it performs no build or deploy action of its own. Ant (build.xml) is the
+  sole build tool for this project; publishing to GitHub Packages is a
+  standalone `mvn deploy:deploy-file` invocation (see
+  .github/workflows/release-to-github-packages.yml) and publishing to Maven
+  Central is a signed-bundle upload via Sonatype's REST API (see
+  .github/workflows/release-to-maven-central.yml) - both consume the
+  already Ant-built artifacts directly, independent of any Maven lifecycle
+  binding in this file.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -20,10 +19,11 @@
     <groupId>org.bluezoo</groupId>
     <artifactId>jsonparser</artifactId>
     <version>1.3</version>
-    <packaging>pom</packaging>
+    <packaging>jar</packaging>
 
     <name>JSON Library</name>
     <description>A simple JSON parsing library.</description>
+    <url>https://github.com/cpkb-bluezoo/jsonparser</url>
 
     <licenses>
         <license>
@@ -32,5 +32,18 @@
             <distribution>repo</distribution>
         </license>
     </licenses>
+
+    <developers>
+        <developer>
+            <name>Chris Burdess</name>
+            <email>dog@gnu.org</email>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/cpkb-bluezoo/jsonparser.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/cpkb-bluezoo/jsonparser.git</developerConnection>
+        <url>https://github.com/cpkb-bluezoo/jsonparser</url>
+    </scm>
 
 </project>
