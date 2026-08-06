@@ -1,6 +1,7 @@
 *~
 build
 dist
+doc
 .DS_Store
 test/junit/classes/
 test/junit/results/
