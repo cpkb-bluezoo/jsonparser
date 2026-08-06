@@ -57,7 +57,12 @@
     </jar>
   </target>
 
-  <target name="javadoc" depends="build">
+  <!-- No depends="build": javadoc generation is a source-level operation
+       and doesn't need anything compiled first - depending on build here
+       used to force a javac compile of module-info.java as a side effect,
+       which only succeeds under a JDK 9+ javac (see release-to-maven-central.yml
+       and pages.yml's own JDK version notes). -->
+  <target name="javadoc">
     <mkdir dir="${doc}"/>
     <javadoc sourcepath="${src}" destdir="${doc}"/>
   </target>
