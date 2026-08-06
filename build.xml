@@ -102,23 +102,29 @@
     </copy>
   </target>
 
-  <target name='junit-test' depends='junit-build'>
+  <target name='junit-test' depends='junit-build' description='Run unit tests'>
     <mkdir dir='${test}/junit/results'/>
-    <junit printsummary='yes' haltonfailure='no'>
+    <junit printsummary='yes' haltonfailure='no' fork='yes' showoutput='true'
+           failureproperty='unit.tests.failed'>
       <classpath>
         <pathelement location='${test}/junit/classes'/>
         <pathelement location='${test}/junit/lib/${junit.jar}'/>
         <pathelement location='${test}/junit/lib/${hamcrest.jar}'/>
         <pathelement location='${build}'/>
       </classpath>
+      <formatter type='xml'/>
+      <formatter type='plain' usefile='false'/>
       <batchtest fork="yes" todir="${test}/junit/results">
         <fileset dir="${test}/junit/src">
           <include name="**/*Test.java" />
         </fileset>
       </batchtest>
-      <formatter type="plain" />
-      <!--formatter type="xml" /-->
     </junit>
+
+    <echo message=''/>
+    <echo message='Unit test results written to ${test}/junit/results'/>
+
+    <fail if='unit.tests.failed' message='Unit test failures detected.'/>
   </target>
 
 </project>
