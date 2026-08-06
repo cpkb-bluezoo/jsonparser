@@ -3,7 +3,12 @@ name: Publish to Maven Central
 # All the actual work (build, sign, bundle, upload) lives in
 # scripts/publish-to-central.sh - the single canonical implementation, also
 # runnable by hand locally for a one-off publish that doesn't need a fresh
-# GitHub Release. This workflow just supplies the version and secrets.
+# GitHub Release. This workflow just supplies secrets - VERSION is left
+# unset so the script auto-detects it from pom.xml's own <version> (and
+# cross-checks it against build.xml's "release" property), the same way a
+# local run would. This works identically whether triggered by a Release
+# (tag ref) or workflow_dispatch (which would also normally be run against
+# a tag, not a branch).
 #
 # publishingType defaults to AUTOMATIC in the script (see its own
 # comments): the bundle is uploaded and goes live on Central automatically
@@ -27,13 +32,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
 
       - name: Set up JDK 11
         uses: actions/setup-java@v5
@@ -59,7 +57,6 @@ jobs:
       - name: Publish to Maven Central
         run: ./scripts/publish-to-central.sh
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           GPG_KEY_ID: ${{ steps.gpg.outputs.key_id }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
