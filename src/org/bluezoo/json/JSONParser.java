@@ -28,12 +28,17 @@ import java.nio.ByteBuffer;
  * <ul>
  *   <li>The caller provides a buffer in read mode (ready for get operations)</li>
  *   <li>The parser consumes as many complete tokens as possible</li>
- *   <li>After {@link #receive(ByteBuffer)} returns, the buffer's position
- *       indicates where unconsumed data begins</li>
- *   <li>If there is unconsumed data (partial token), the caller MUST call
- *       {@link ByteBuffer#compact()} before reading more data into the buffer</li>
- *   <li>The next {@code receive()} call will continue from where parsing left off</li>
+ *   <li>Any trailing incomplete token is copied into an internal buffer, so
+ *       after {@link #receive(ByteBuffer)} returns the whole input buffer has
+ *       been consumed ({@link ByteBuffer#compact()} is harmless but not
+ *       required)</li>
+ *   <li>The next {@code receive()} call prepends the carried-over bytes and
+ *       continues from where parsing left off</li>
  * </ul>
+ * <p><strong>Memory:</strong> memory use does not grow with document size,
+ * but string values and keys are buffered until complete, so peak memory is
+ * proportional to the largest single string or key (capped by
+ * {@link #setMaxStringLength} / {@link #setMaxNameLength} by default).
  *
  * <h3>Usage (Streaming)</h3>
  * <pre>{@code
@@ -294,19 +299,13 @@ public class JSONParser {
      * Receive bytes into the parser.
      * <p>
      * Bytes are processed immediately. Parsing events are fired to the
-     * content handler as tokens are recognized. Incomplete tokens are
-     * left in the buffer - the position is set to the start of the
-     * incomplete token.
+     * content handler as tokens are recognized. An incomplete trailing token
+     * is copied into an internal buffer and prepended to the next chunk.
      * <p>
      * <strong>Buffer Contract:</strong> The byte buffer must be in read mode
-     * (after {@code flip()}). After this method returns:
-     * <ul>
-     *   <li>The buffer's position indicates where unconsumed data begins</li>
-     *   <li>If {@code position() < limit()}, there is a partial token that needs
-     *       more data to complete</li>
-     *   <li>The caller MUST call {@code buffer.compact()} before reading more
-     *       data into the buffer</li>
-     * </ul>
+     * (after {@code flip()}). After this method returns the buffer has been
+     * fully consumed (position equals limit); {@code buffer.compact()} is
+     * harmless but not required before reading more data into it.
      *
      * @param data the byte buffer to process (must be in read mode)
      * @throws JSONException if there is a parsing error or stream is closed

@@ -31,7 +31,8 @@
  * </p>
  * <ul>
  *   <li><b>Non-blocking I/O</b> - Parse JSON as bytes arrive without blocking</li>
- *   <li><b>Low memory footprint</b> - Process large documents without loading them entirely into memory</li>
+ *   <li><b>Low memory footprint</b> - Process large documents without loading them entirely into memory
+ *       (memory is bounded by the largest single string or key, which is buffered until complete)</li>
  *   <li><b>High performance</b> - Optimized tokenization with direct buffer parsing</li>
  *   <li><b>Standards compliance</b> - Fully conformant with RFC 8259 and ECMA-404</li>
  * </ul>

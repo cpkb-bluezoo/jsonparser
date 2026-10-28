@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Documentation correction:** earlier releases (including the 1.2 changelog
+  entry below) and the README claimed the parser "operates in constant
+  memory" and does "no internal buffering". That was not accurate.
+  - Memory use does not grow with document size, but it is not constant:
+    `JSONContentHandler.stringValue(String)` and `key(String)` deliver a
+    complete value, so the parser must hold every byte of a string or key
+    until its closing quote arrives. Peak memory is proportional to the
+    largest single string or key. This is bounded by default by
+    `setMaxStringLength` (20,000,000) and `setMaxNameLength` (50,000), and
+    unbounded if those limits are disabled.
+  - Since 1.3, `JSONParser` copies any incomplete trailing token into an
+    internal `pending` buffer, so `receive()` fully consumes the buffer it
+    is given. The README and `receive()` Javadoc previously described the
+    older caller-owned-buffer contract.
+  - A string spanning many chunks is rescanned from its opening quote on
+    every chunk, so very large strings delivered in small chunks cost
+    superlinear time.
+- README, package Javadoc and `JSONParser` Javadoc now state the real
+  behaviour (see "Memory behaviour" in the README).
+
+### Planned
+
+- A future major release will change `JSONContentHandler` to deliver string
+  values incrementally (a start event, zero or more content events, an end
+  event) so strings can be flushed without buffering. This is a breaking
+  API change and is what is required to make large-string handling truly
+  constant-memory.
+
 ## [1.3] - 2026-07-14
 
 ### Added

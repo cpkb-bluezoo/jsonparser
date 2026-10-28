@@ -5,8 +5,10 @@ This is a tiny and efficient JSON parser and serialization library for
 Java. It takes up only 31KB (including the serialisation feature), as
 opposed to object-mapping-based JSON parsers such as GSON (306KB) or
 Jackson (580KB for streaming alone, 2.3MB with object-mapping/databind
-support), and is fast and conformant. The streaming parser operates in
-**constant memory** regardless of document size.
+support), and is fast and conformant. The streaming parser's memory use
+does not grow with document size, but it does grow with the size of the
+largest single string value or key, which is buffered until complete (see
+[Memory behaviour](#memory-behaviour)).
 
 Full JavaDoc documentation is included in the package, see the doc
 subdirectory.
@@ -31,7 +33,8 @@ This design makes the parser ideal for:
 - **Event-driven architectures** (reactive streams, actors)
 - **High-concurrency servers** where blocking is prohibitive
 - **Data pipeline architectures** where JSON transformation is one stage
-- **Memory-constrained environments** — operates in constant memory
+- **Memory-constrained environments** — memory use independent of document
+  size (bounded by the largest string, see [Memory behaviour](#memory-behaviour))
 
 Traditional object-mapping based JSON parsers such as GSON or Jackson, in
 contrast, are **blocking** — your application thread has to block while
@@ -40,11 +43,13 @@ delivered yet, your entire process has to wait. Then when it finally
 produces the parse result, that result is an object taking up memory
 proportional to the size of the JSON message.
 
-With this event-based parser, memory usage is **constant** — only your
-buffer size, regardless of how large the JSON document is. You control
-the buffer, there is no internal buffering, and JSON semantic events are
-delivered before the parse is complete, even before the message has
-finished arriving over the network: near-zero latency, zero-copy design.
+With this event-based parser, memory usage does not depend on how large
+the JSON document is: only your buffer, plus the parser's carry-over of
+the one token currently being assembled (see
+[Memory behaviour](#memory-behaviour) for what that means for large
+strings). JSON semantic events are delivered before the parse is complete,
+even before the message has finished arriving over the network: low
+latency, and zero-copy for any token that arrives within a single chunk.
 
 #### How It Works
 
@@ -53,10 +58,11 @@ via the SAX-like `JSONContentHandler` interface as soon as complete tokens
 are recognized. This allows it to operate as a **streaming transformer** in
 a data pipeline, converting raw byte chunks into semantic JSON events.
 
-The parser operates in **constant memory** — it does not buffer incomplete
-tokens internally. Instead, when a token spans chunk boundaries, the parser
-leaves unconsumed bytes in the buffer (underflow). The caller is responsible
-for the standard NIO buffer lifecycle: `compact()`, read more data, `flip()`.
+When a token spans chunk boundaries, the parser copies the incomplete
+token's bytes into an internal `pending` buffer and prepends them to the
+next chunk. `receive()` therefore always consumes the whole buffer you pass
+it; calling `compact()` afterwards is harmless but not required. Tokens
+that arrive within a single chunk are tokenized in place with no copy.
 
 **Core Methods:**
 - `receive(ByteBuffer data)` - Push a chunk of bytes into the parser
@@ -121,7 +127,34 @@ This non-blocking approach means your application can:
 - Integrate with async I/O frameworks (Netty, Vert.x, etc.)
 - Build reactive data pipelines where JSON parsing is a transformation stage
 - Handle multiple concurrent JSON streams without thread-per-connection
-- Process arbitrarily large documents in fixed memory
+- Process arbitrarily large documents with memory independent of document
+  size (subject to the string-length caveat in
+  [Memory behaviour](#memory-behaviour))
+
+### Memory behaviour
+
+Memory use is independent of document size, but it is **not constant**:
+
+- Structural tokens, numbers, literals and whitespace are small and bounded
+  (numbers by `setMaxNumberLength`, default 1000).
+- **Strings and keys are buffered until their closing quote arrives.**
+  `JSONContentHandler.stringValue(String)` and `key(String)` take a complete
+  value, so a string that spans several `receive()` chunks is held in the
+  internal `pending` buffer (growing by doubling) until it is complete, and
+  then materialized as a `String`. Peak memory is therefore proportional to
+  the largest single string or key, roughly 2-3 times its size in bytes in
+  the worst case.
+- Because the partial token is rescanned from its opening quote on each
+  chunk, a very large string delivered in small chunks also costs
+  time that grows faster than linearly with the string's length.
+- By default this is capped: `setMaxStringLength` (20,000,000) and
+  `setMaxNameLength` (50,000). `disableAllLimits()`, or setting those limits
+  to 0, removes the cap, and a single huge string can then exhaust memory.
+
+Truly constant-memory handling of large strings requires the handler to
+receive string content incrementally (start / content chunks / end events)
+instead of as one `String`. That is an incompatible change to
+`JSONContentHandler` and is planned for a future major release.
 
 ### Traditional Blocking API (Convenience)
 
