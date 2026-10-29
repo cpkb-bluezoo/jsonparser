@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     superlinear time.
 - README, package Javadoc and `JSONParser` Javadoc now state the real
   behaviour (see "Memory behaviour" in the README).
+- `JSONLocator` positions depend on how the input is chunked no longer: the
+  first space or tab of every whitespace run was not counted in the column,
+  so the reported column varied with the `receive()` chunk boundaries (and
+  was short even for a single chunk). CRLF was also counted as two line
+  breaks; CR, LF and CRLF are now each one, including when a chunk boundary
+  falls between the CR and the LF.
 
 ### Changed
 

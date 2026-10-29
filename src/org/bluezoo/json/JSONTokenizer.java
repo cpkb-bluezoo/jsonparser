@@ -54,6 +54,7 @@ class JSONTokenizer implements JSONLocator {
 
     private int lineNumber = 1;
     private int columnNumber = 0;
+    private boolean afterCR = false; // Last byte was a CR, so a following LF is the same line break
     private boolean closed = false;
 
     // Track context for key vs value
@@ -175,6 +176,9 @@ class JSONTokenizer implements JSONLocator {
 
             // Check if this is whitespace (which handles its own line/column tracking)
             boolean isWhitespace = (b == ' ' || b == '\n' || b == '\t' || b == '\r');
+            if (!isWhitespace) {
+                afterCR = false;
+            }
 
             boolean processed = processToken(b, data);
 
@@ -793,53 +797,15 @@ class JSONTokenizer implements JSONLocator {
      * Process whitespace starting with first byte.
      */
     private boolean processWhitespace(byte first, ByteBuffer data) throws JSONException {
-        // Update line/column for first character
-        if (first == '\n') {
-            lineNumber++;
-            columnNumber = 0;
-        } else if (first == '\r') {
-            lineNumber++;
-            columnNumber = 0;
-        }
-
-        if (!needsWhitespace) {
-            // Handler doesn't need whitespace - just consume it
-            while (data.hasRemaining()) {
-                int savedPos = data.position();
-                byte b = data.get();
-
-                if (b == ' ' || b == '\t') {
-                    columnNumber++;
-                } else if (b == '\n') {
-                    lineNumber++;
-                    columnNumber = 0;
-                } else if (b == '\r') {
-                    lineNumber++;
-                    columnNumber = 0;
-                } else {
-                    // Not whitespace - backtrack
-                    data.position(savedPos);
-                    break;
-                }
-            }
-            return true;
-        }
-
-        // Handler needs whitespace - extract string
         int startPos = data.position() - 1; // Before first byte
+        advanceOverWhitespace(first);
 
         while (data.hasRemaining()) {
             int savedPos = data.position();
             byte b = data.get();
 
-            if (b == ' ' || b == '\t') {
-                columnNumber++;
-            } else if (b == '\n') {
-                lineNumber++;
-                columnNumber = 0;
-            } else if (b == '\r') {
-                lineNumber++;
-                columnNumber = 0;
+            if (b == ' ' || b == '\t' || b == '\n' || b == '\r') {
+                advanceOverWhitespace(b);
             } else {
                 // Not whitespace - backtrack
                 data.position(savedPos);
@@ -847,10 +813,35 @@ class JSONTokenizer implements JSONLocator {
             }
         }
 
-        // Whitespace is always ASCII, so this is always the cheap fast path
-        String ws = decodeSpan(data, startPos, data.position(), false);
-        handler.whitespace(ws);
+        if (needsWhitespace) {
+            // Whitespace is always ASCII, so this is always the cheap fast path
+            String ws = decodeSpan(data, startPos, data.position(), false);
+            handler.whitespace(ws);
+        }
         return true;
+    }
+
+    /**
+     * Updates the line/column position for one whitespace byte. CR, LF and
+     * CRLF are each a single line break; {@code afterCR} carries the CR
+     * across calls so the pair is not counted twice if a chunk boundary
+     * falls between them.
+     */
+    private void advanceOverWhitespace(byte b) {
+        if (b == '\n') {
+            if (!afterCR) {
+                lineNumber++;
+            }
+            columnNumber = 0;
+            afterCR = false;
+        } else if (b == '\r') {
+            lineNumber++;
+            columnNumber = 0;
+            afterCR = true;
+        } else {
+            columnNumber++;
+            afterCR = false;
+        }
     }
 
     /**
