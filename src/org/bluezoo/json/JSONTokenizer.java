@@ -49,7 +49,14 @@ import java.util.HashSet;
 class JSONTokenizer implements JSONLocator {
 
     private final JSONContentHandler handler;
-    private StringBuilder escapeBuilder; // Lazily allocated for strings with escapes
+    private StringBuilder escapeBuilder; // Lazily allocated for keys with escapes
+
+    // A string value is delivered to the handler as it is read, never
+    // buffered: inString is true between startStringValue and
+    // endStringValue, and chars holds decoded characters awaiting delivery.
+    private boolean inString;
+    private long stringBytes; // raw content bytes of the current string value consumed so far
+    private CharBuffer chars;
     private boolean needsWhitespace; // Whether handler needs whitespace events
 
     private int lineNumber = 1;
@@ -158,6 +165,11 @@ class JSONTokenizer implements JSONLocator {
         return closed;
     }
 
+    /** Whether a string value has been started but its closing quote not yet seen. */
+    boolean isInString() {
+        return inString;
+    }
+
     /**
      * Process tokens from the ByteBuffer, calling handler methods.
      * Buffer must be in read mode (position at start, limit at end).
@@ -166,6 +178,13 @@ class JSONTokenizer implements JSONLocator {
      */
     void receive(ByteBuffer data) throws JSONException {
         while (data.hasRemaining()) {
+            if (inString) {
+                if (!continueString(data)) {
+                    return;
+                }
+                continue;
+            }
+
             // Save position for backtracking
             int saveLineNumber = lineNumber;
             int saveColumnNumber = columnNumber;
@@ -213,20 +232,30 @@ class JSONTokenizer implements JSONLocator {
                 if (state == State.EXPECT_COLON || state == State.AFTER_VALUE) {
                     throw new JSONException("Unexpected string");
                 }
-                boolean isKey = (state == State.EXPECT_KEY);
-                if (!processString(data, isKey)) {
-                    return false;
+                if (state == State.EXPECT_KEY) {
+                    // A key is a single token: it must be complete in the buffer
+                    if (!processKey(data)) {
+                        return false;
+                    }
+                    seenAnyToken = true;
+                    if (limits.maxTokenCount > 0 && ++tokenCount > limits.maxTokenCount) {
+                        throw new JSONException("Maximum token count exceeded: " + limits.maxTokenCount);
+                    }
+                    afterComma = false;
+                    state = State.EXPECT_COLON;
+                    return true;
                 }
+                // A string value is streamed: report its start now and
+                // deliver its content as it arrives (see continueString)
+                handler.startStringValue();
+                columnNumber++;
+                inString = true;
+                stringBytes = 0;
                 seenAnyToken = true;
                 if (limits.maxTokenCount > 0 && ++tokenCount > limits.maxTokenCount) {
                     throw new JSONException("Maximum token count exceeded: " + limits.maxTokenCount);
                 }
                 afterComma = false;
-                if (isKey) {
-                    state = State.EXPECT_COLON;
-                } else {
-                    state = State.AFTER_VALUE;
-                }
                 return true;
 
             case ',':
@@ -418,7 +447,7 @@ class JSONTokenizer implements JSONLocator {
     }
 
     /**
-     * Process a string token.
+     * Process an object key token.
      * Opening quote already consumed.
      * <p>
      * Scanning for the closing quote, backslash, and control characters is
@@ -428,15 +457,15 @@ class JSONTokenizer implements JSONLocator {
      * delimiters is ever decoded, via {@link #decodeSpan}, and only once
      * its extent is fully known.
      */
-    private boolean processString(ByteBuffer data, boolean isKey) throws JSONException {
+    private boolean processKey(ByteBuffer data) throws JSONException {
         if (data.hasArray()) {
-            return processStringArray(data, isKey);
+            return processKeyArray(data);
         }
-        return processStringGeneric(data, isKey);
+        return processKeyGeneric(data);
     }
 
     /**
-     * Array-backed fast path for {@link #processString}: scans for the
+     * Array-backed fast path for {@link #processKey}: scans for the
      * closing quote/escapes/control-characters via direct indexing into the
      * buffer's backing array instead of {@code ByteBuffer}'s bounds-checked
      * relative {@code get()} - the same trade {@link UTF8Decoder} already
@@ -446,7 +475,7 @@ class JSONTokenizer implements JSONLocator {
      * in sync on a "need more data" return, since {@link #receive} discards
      * it via {@code reset()} unconditionally in that case.
      */
-    private boolean processStringArray(ByteBuffer data, boolean isKey) throws JSONException {
+    private boolean processKeyArray(ByteBuffer data) throws JSONException {
         byte[] arr = data.array();
         int off = data.arrayOffset();
         int startPos = data.position(); // buffer-relative, just after opening quote
@@ -462,10 +491,10 @@ class JSONTokenizer implements JSONLocator {
         // - see KeySymbolTable and KEY_INTERN_DISABLE_THRESHOLD. Excludes
         // the terminating quote: updated only for bytes confirmed to be
         // content, below.
-        boolean tryIntern = isKey && !keyInternDisabled;
+        boolean tryIntern = !keyInternDisabled;
         int keyHash = tryIntern ? KeySymbolTable.initialHash() : 0;
 
-        int lengthLimit = isKey ? limits.maxNameLength : limits.maxStringLength;
+        int lengthLimit = limits.maxNameLength;
 
         while (p < arrLimit) {
             int bytePos = p - off; // buffer-relative position of this byte
@@ -477,8 +506,7 @@ class JSONTokenizer implements JSONLocator {
             // so a pathologically long unescaped string is rejected without
             // needing to be fully buffered first.
             if (lengthLimit > 0 && bytePos - startPos > lengthLimit) {
-                throw new JSONException((isKey ? "Maximum key length exceeded: " : "Maximum string length exceeded: ")
-                        + lengthLimit);
+                throw new JSONException("Maximum key length exceeded: " + lengthLimit);
             }
 
             if (b == '"') {
@@ -513,14 +541,10 @@ class JSONTokenizer implements JSONLocator {
                     value = builder.toString();
                 }
 
-                if (isKey) {
-                    if (rejectDuplicateKeys && !duplicateKeyStack.peek().add(value)) {
-                        throw new JSONException("Duplicate key: " + value);
-                    }
-                    handler.key(value);
-                } else {
-                    handler.stringValue(value);
+                if (rejectDuplicateKeys && !duplicateKeyStack.peek().add(value)) {
+                    throw new JSONException("Duplicate key: " + value);
                 }
+                handler.key(value);
                 columnNumber += 2 + srcCharCount;
                 return true;
             }
@@ -576,12 +600,12 @@ class JSONTokenizer implements JSONLocator {
     }
 
     /**
-     * Fallback path for {@link #processString} using the relative buffer
+     * Fallback path for {@link #processKey} using the relative buffer
      * API - correct for direct buffers, which the public
      * {@link JSONParser#receive(ByteBuffer)} API could in principle be
      * called with even though nothing in this project constructs one.
      */
-    private boolean processStringGeneric(ByteBuffer data, boolean isKey) throws JSONException {
+    private boolean processKeyGeneric(ByteBuffer data) throws JSONException {
         int startPos = data.position(); // just after opening quote
         StringBuilder builder = null;
         int spanStart = startPos; // start of the not-yet-flushed raw span
@@ -590,7 +614,7 @@ class JSONTokenizer implements JSONLocator {
         // every byte anyway), so decodeSpan doesn't need its own separate
         // scan of the same bytes just to decide ASCII-vs-decode strategy.
         boolean sawNonAscii = false;
-        int lengthLimit = isKey ? limits.maxNameLength : limits.maxStringLength;
+        int lengthLimit = limits.maxNameLength;
 
         while (data.hasRemaining()) {
             int bytePos = data.position();
@@ -599,10 +623,9 @@ class JSONTokenizer implements JSONLocator {
                 sawNonAscii = true;
             }
 
-            // See processStringArray for why this checks raw byte position.
+            // See processKeyArray for why this checks raw byte position.
             if (lengthLimit > 0 && bytePos - startPos > lengthLimit) {
-                throw new JSONException((isKey ? "Maximum key length exceeded: " : "Maximum string length exceeded: ")
-                        + lengthLimit);
+                throw new JSONException("Maximum key length exceeded: " + lengthLimit);
             }
 
             if (b == '"') {
@@ -622,15 +645,10 @@ class JSONTokenizer implements JSONLocator {
                     value = builder.toString();
                 }
 
-                // Call appropriate handler method
-                if (isKey) {
-                    if (rejectDuplicateKeys && !duplicateKeyStack.peek().add(value)) {
-                        throw new JSONException("Duplicate key: " + value);
-                    }
-                    handler.key(value);
-                } else {
-                    handler.stringValue(value);
+                if (rejectDuplicateKeys && !duplicateKeyStack.peek().add(value)) {
+                    throw new JSONException("Duplicate key: " + value);
                 }
+                handler.key(value);
                 columnNumber += 2 + srcCharCount; // +2 for the opening/closing quotes
                 return true;
             } else if (b == '\\') {
@@ -682,6 +700,201 @@ class JSONTokenizer implements JSONLocator {
         }
 
         throw new JSONException("Unclosed string");
+    }
+
+    /**
+     * Continues the string value in progress, consuming as much of
+     * {@code data} as can be delivered. Nothing is buffered: plain runs are
+     * decoded into {@link #chars} and handed to the handler as soon as the
+     * run ends or the buffer fills, so a string of any length takes a fixed
+     * amount of memory.
+     * <p>
+     * A fragment that cannot be completed yet (a multi-byte UTF-8 sequence
+     * or an escape sequence cut off by the end of the buffer, or an escaped
+     * high surrogate whose partner has not been seen) is left unconsumed
+     * for the caller to present again with more data.
+     *
+     * @return true if the closing quote was consumed, false if more data is
+     *         needed to make progress
+     */
+    private boolean continueString(ByteBuffer data) throws JSONException {
+        ensureCharCapacity(data);
+        int lengthLimit = limits.maxStringLength;
+
+        while (true) {
+            int runStart = data.position();
+            int end = data.limit();
+            int p = scanPlainRun(data, runStart, end);
+
+            if (p > runStart) {
+                // Checked before the run is delivered, so a string over the
+                // limit is rejected without its excess ever being reported
+                if (lengthLimit > 0 && stringBytes + (p - runStart) > lengthLimit) {
+                    throw new JSONException("Maximum string length exceeded: " + lengthLimit);
+                }
+                if (chars.remaining() < p - runStart) {
+                    flushChars();
+                }
+                int before = chars.position();
+                data.limit(p);
+                try {
+                    // A delimiter follows the run, so a truncated trailing
+                    // sequence can never be completed: that is an error
+                    UTF8Decoder.decode(data, chars, p < end);
+                } finally {
+                    data.limit(end);
+                }
+                stringBytes += data.position() - runStart;
+                columnNumber += chars.position() - before;
+            }
+
+            if (p == end) {
+                flushChars();
+                return false; // Out of data (any partial UTF-8 tail stays unconsumed)
+            }
+
+            byte b = data.get(p);
+            if (b == '"') {
+                flushChars();
+                data.position(p + 1);
+                columnNumber++;
+                inString = false;
+                state = State.AFTER_VALUE;
+                handler.endStringValue();
+                return true;
+            }
+            if (b != '\\') {
+                throw new JSONException("Unescaped control character in string");
+            }
+
+            // Escape sequence: needs all of its bytes to be present
+            data.position(p + 1);
+            Character escaped = processEscapeSequence(data);
+            if (escaped == null) {
+                data.position(p);
+                flushChars();
+                return false;
+            }
+            char first = escaped.charValue();
+            char second = 0;
+            if (Character.isHighSurrogate(first)) {
+                // Deliver a surrogate pair together, so no content call ends
+                // between its halves
+                int follows = lowSurrogateEscapeFollows(data);
+                if (follows < 0) {
+                    data.position(p);
+                    flushChars();
+                    return false;
+                }
+                if (follows > 0) {
+                    data.position(data.position() + 1); // past the backslash
+                    second = processEscapeSequence(data).charValue();
+                }
+            }
+            if (chars.remaining() < 2) {
+                flushChars();
+            }
+            chars.put(first);
+            if (second != 0) {
+                chars.put(second);
+            }
+            int consumed = data.position() - p;
+            stringBytes += consumed;
+            columnNumber += consumed; // raw escape bytes are always ASCII
+            if (lengthLimit > 0 && stringBytes > lengthLimit) {
+                throw new JSONException("Maximum string length exceeded: " + lengthLimit);
+            }
+        }
+    }
+
+    /**
+     * Returns the index of the first byte in {@code [from, to)} that ends a
+     * run of plain string content (a quote, a backslash or a control
+     * character), or {@code to} if there is none. UTF-8 is self-synchronizing,
+     * so none of those bytes can occur inside a multi-byte sequence.
+     */
+    private static int scanPlainRun(ByteBuffer data, int from, int to) {
+        if (data.hasArray()) {
+            byte[] arr = data.array();
+            int off = data.arrayOffset();
+            for (int i = from; i < to; i++) {
+                byte b = arr[off + i];
+                if (b == '"' || b == '\\' || (b >= 0 && b < 0x20)) {
+                    return i;
+                }
+            }
+            return to;
+        }
+        for (int i = from; i < to; i++) {
+            byte b = data.get(i);
+            if (b == '"' || b == '\\' || (b >= 0 && b < 0x20)) {
+                return i;
+            }
+        }
+        return to;
+    }
+
+    /**
+     * Tells whether the bytes at {@code data}'s position are an escaped low
+     * surrogate ({@code \\uDC00} to {@code \\uDFFF}), following an escaped high
+     * surrogate. Returns 1 if so, 0 if not (the high surrogate is on its
+     * own), or -1 if too few bytes are available to tell.
+     */
+    private static int lowSurrogateEscapeFollows(ByteBuffer data) {
+        int q = data.position();
+        int available = data.limit() - q;
+        if (available == 0) {
+            return -1;
+        }
+        if (data.get(q) != '\\') {
+            return 0;
+        }
+        if (available < 2) {
+            return -1;
+        }
+        if (data.get(q + 1) != 'u') {
+            return 0;
+        }
+        if (available < 6) {
+            return -1;
+        }
+        int value = 0;
+        for (int i = 2; i < 6; i++) {
+            byte h = data.get(q + i);
+            int digit;
+            if (h >= '0' && h <= '9') {
+                digit = h - '0';
+            } else if (h >= 'a' && h <= 'f') {
+                digit = h - 'a' + 10;
+            } else if (h >= 'A' && h <= 'F') {
+                digit = h - 'A' + 10;
+            } else {
+                return 0; // not a valid escape; it is reported when it is reached
+            }
+            value = (value << 4) | digit;
+        }
+        return (value >= 0xDC00 && value <= 0xDFFF) ? 1 : 0;
+    }
+
+    /**
+     * Makes sure {@link #chars} can hold the decoded form of everything
+     * {@code data} could contain: UTF-8 never decodes to more chars than
+     * bytes. Only called with {@code chars} empty, so nothing is lost if it
+     * is replaced.
+     */
+    private void ensureCharCapacity(ByteBuffer data) {
+        if (chars == null || chars.capacity() < data.remaining()) {
+            chars = CharBuffer.allocate(Math.max(data.capacity(), 64));
+        }
+    }
+
+    /** Hands any decoded characters to the handler and empties the buffer. */
+    private void flushChars() throws JSONException {
+        if (chars.position() > 0) {
+            chars.flip();
+            handler.stringValueContent(chars);
+            chars.clear();
+        }
     }
 
     /**
@@ -860,7 +1073,7 @@ class JSONTokenizer implements JSONLocator {
      * in a literal-dominated document (e.g. a large array of booleans/nulls)
      * goes through here, so avoiding a per-character bounds-checked
      * {@code ByteBuffer.get()} matters as much as it did for
-     * {@link #processStringArray}.
+     * {@link #processKeyArray}.
      */
     private boolean processLiteralArray(ByteBuffer data, String remaining, Boolean boolValue) throws JSONException {
         byte[] arr = data.array();
@@ -900,7 +1113,7 @@ class JSONTokenizer implements JSONLocator {
 
     /**
      * Fallback path for {@link #processLiteral} using the relative buffer
-     * API - correct for direct buffers (see {@link #processStringGeneric}).
+     * API - correct for direct buffers (see {@link #processKeyGeneric}).
      */
     private boolean processLiteralGeneric(ByteBuffer data, String remaining, Boolean boolValue) throws JSONException {
         // First character already consumed and counted

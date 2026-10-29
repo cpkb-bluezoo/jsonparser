@@ -17,7 +17,7 @@ public class TokenFragmentationTest {
     /**
      * Helper class to capture parse events
      */
-    private static class CaptureHandler extends JSONDefaultHandler {
+    private static class CaptureHandler extends StringAssemblingHandler {
         List<String> events = new ArrayList<>();
         
         @Override

@@ -165,7 +165,7 @@ public class StreamingTest {
     /**
      * Simple test handler that collects events.
      */
-    private static class TestHandler extends JSONDefaultHandler {
+    private static class TestHandler extends StringAssemblingHandler {
         List<String> keys = new ArrayList<>();
         List<String> strings = new ArrayList<>();
         List<Number> numbers = new ArrayList<>();

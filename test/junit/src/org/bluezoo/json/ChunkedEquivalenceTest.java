@@ -191,10 +191,13 @@ public class ChunkedEquivalenceTest {
             }
         }
 
+        private String position() {
+            return locator == null ? "" : "@" + locator.getLineNumber() + ":" + locator.getColumnNumber();
+        }
+
         private void add(String event) {
             flushWhitespace();
-            String at = locator == null ? "" : "@" + locator.getLineNumber() + ":" + locator.getColumnNumber();
-            events.add(event + at);
+            events.add(event + position());
         }
 
         void finish() {
@@ -226,9 +229,37 @@ public class ChunkedEquivalenceTest {
             add("KEY:" + key);
         }
 
+        // The one place that knows strings arrive in pieces. The locator
+        // position reported with a string is where it started, so these
+        // positions stay comparable with those of the other tokens.
+        private StringBuilder string;
+        private String stringStart;
+        private char lastChar;
+
         @Override
-        public void stringValue(String value) {
-            add("STRING:" + value);
+        public void startStringValue() {
+            string = new StringBuilder();
+            stringStart = position();
+            lastChar = 0;
+        }
+
+        @Override
+        public void stringValueContent(CharSequence content) {
+            if (content.length() == 0) {
+                throw new AssertionError("Empty string content was delivered");
+            }
+            if (Character.isHighSurrogate(lastChar) && Character.isLowSurrogate(content.charAt(0))) {
+                throw new AssertionError("A surrogate pair was split across two content calls");
+            }
+            string.append(content);
+            lastChar = content.charAt(content.length() - 1);
+        }
+
+        @Override
+        public void endStringValue() {
+            flushWhitespace();
+            events.add("STRING:" + string + stringStart);
+            string = null;
         }
 
         @Override

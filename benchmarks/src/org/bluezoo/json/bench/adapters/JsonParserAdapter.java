@@ -70,9 +70,27 @@ public class JsonParserAdapter implements ParserAdapter {
             checksum = checksum * 31 + number.hashCode();
         }
 
+        // String.hashCode() computed incrementally over the streamed content,
+        // so it matches the other libraries' checksums without building a String
+        private int stringHash;
+
         @Override
-        public void stringValue(String value) {
-            checksum = checksum * 31 + value.hashCode();
+        public void startStringValue() {
+            stringHash = 0;
+        }
+
+        @Override
+        public void stringValueContent(CharSequence content) {
+            int h = stringHash;
+            for (int i = 0, n = content.length(); i < n; i++) {
+                h = 31 * h + content.charAt(i);
+            }
+            stringHash = h;
+        }
+
+        @Override
+        public void endStringValue() {
+            checksum = checksum * 31 + stringHash;
         }
 
         @Override

@@ -116,6 +116,23 @@ public class LocatorTest {
     }
 
     @Test
+    public void stringContentAdvancesTheColumnBySourceCharacters() throws Exception {
+        // Distance from the 1 to the 2 is: "1" "," <string> ","
+        // plain: "abc" is 5 source characters
+        forEveryMode("[1,\"abc\",2]", (p, label) ->
+                assertEquals(label, 1 + 1 + 5 + 1, p.get(1)[1] - p.get(0)[1]));
+        // multi-byte UTF-8: e-acute, euro sign and an emoji are 1 + 1 + 2 UTF-16 units, plus quotes
+        forEveryMode("[1,\"\u00e9\u20ac\ud83d\ude00\",2]", (p, label) ->
+                assertEquals(label, 1 + 1 + 6 + 1, p.get(1)[1] - p.get(0)[1]));
+        // escapes count as the raw characters written: \n is 2, \u00e9 is 6, a pair is 12
+        forEveryMode("[1,\"\\n\\u00e9\\ud83d\\ude00\",2]", (p, label) ->
+                assertEquals(label, 1 + 1 + (1 + 2 + 6 + 12 + 1) + 1, p.get(1)[1] - p.get(0)[1]));
+        // an empty string is just its quotes
+        forEveryMode("[1,\"\",2]", (p, label) ->
+                assertEquals(label, 1 + 1 + 2 + 1, p.get(1)[1] - p.get(0)[1]));
+    }
+
+    @Test
     public void columnRestartsAfterALineBreak() throws Exception {
         // Indented by 3 on line 2, not indented on line 3: 3 columns apart
         forEveryMode("[\n   1,\n2]", (p, label) -> {

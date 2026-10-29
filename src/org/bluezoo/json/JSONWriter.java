@@ -84,6 +84,10 @@ public class JSONWriter {
     private State state = State.INIT0;
     private int depth = 0;
 
+    // In a streamed string: a high surrogate that ended the last content and
+    // is waiting to see whether the next content starts with its partner
+    private char pendingHighSurrogate;
+
     /**
      * Creates a new JSON writer with default capacity (4KB) and no indentation.
      *
@@ -246,6 +250,91 @@ public class JSONWriter {
     }
 
     /**
+     * Starts a string value that is supplied in pieces: write the opening
+     * quote, then any number of {@link #writeStringContent(CharSequence)}
+     * calls, then {@link #writeEndString()}. This is the counterpart of
+     * {@link JSONContentHandler#startStringValue()}, so a parser can feed a
+     * writer directly with neither holding the whole string.
+     *
+     * @throws IOException if there is an error writing data
+     */
+    public void writeStartString() throws IOException {
+        if (indentConfig != null) {
+            writeIndentedValueStart();
+        } else {
+            writeValueSeparatorIfNeeded();
+        }
+        ensureCapacity(1);
+        buffer.put((byte) '"');
+        pendingHighSurrogate = 0;
+        sendIfNeeded();
+    }
+
+    /**
+     * Writes the next characters of a string started with
+     * {@link #writeStartString()}, escaping them as needed. The characters
+     * are encoded and sent on as they are written, so the writer's buffer
+     * does not grow with the length of the string. The content is not
+     * retained, so the caller may reuse it as soon as this method returns.
+     * <p>
+     * A surrogate pair may be split across two calls.
+     *
+     * @param content the characters to write
+     * @throws IOException if there is an error writing data
+     */
+    public void writeStringContent(CharSequence content) throws IOException {
+        int length = content.length();
+        int i = 0;
+        if (pendingHighSurrogate != 0 && length > 0) {
+            char high = pendingHighSurrogate;
+            pendingHighSurrogate = 0;
+            char c = content.charAt(0);
+            if (Character.isLowSurrogate(c)) {
+                putCodePointStreaming(Character.toCodePoint(high, c));
+                i = 1;
+            } else {
+                putCodePointStreaming(high); // on its own
+            }
+        }
+        while (i < length) {
+            char c = content.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 == length) {
+                    pendingHighSurrogate = c;
+                    break;
+                }
+                char next = content.charAt(i + 1);
+                if (Character.isLowSurrogate(next)) {
+                    putCodePointStreaming(Character.toCodePoint(c, next));
+                    i += 2;
+                    continue;
+                }
+            }
+            putCodePointStreaming(c);
+            i++;
+        }
+        sendIfNeeded();
+    }
+
+    /**
+     * Ends a string value started with {@link #writeStartString()}: writes
+     * the closing quote.
+     *
+     * @throws IOException if there is an error writing data
+     */
+    public void writeEndString() throws IOException {
+        if (pendingHighSurrogate != 0) {
+            char high = pendingHighSurrogate;
+            pendingHighSurrogate = 0;
+            putCodePointStreaming(high); // on its own
+        }
+        ensureCapacity(1);
+        buffer.put((byte) '"');
+        state = State.AFTER_VALUE;
+        sendIfNeeded();
+    }
+
+    /**
      * Writes a number value.
      *
      * @param value the number value
@@ -383,48 +472,67 @@ public class JSONWriter {
                 growBuffer(buffer.capacity() * 2);
             }
 
-            // Check for characters that need escaping
-            if (codePoint == '"') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) '"');
-            } else if (codePoint == '\\') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) '\\');
-            } else if (codePoint == '\b') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) 'b');
-            } else if (codePoint == '\f') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) 'f');
-            } else if (codePoint == '\n') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) 'n');
-            } else if (codePoint == '\r') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) 'r');
-            } else if (codePoint == '\t') {
-                buffer.put((byte) '\\');
-                buffer.put((byte) 't');
-            } else if (codePoint < 0x20) {
-                // Control character - escape as unicode
-                buffer.put((byte) '\\');
-                buffer.put((byte) 'u');
-                buffer.put((byte) '0');
-                buffer.put((byte) '0');
-                buffer.put((byte) hexChar((codePoint >> 4) & 0xF));
-                buffer.put((byte) hexChar(codePoint & 0xF));
-            } else if (codePoint < 0x80) {
-                // ASCII
-                buffer.put((byte) codePoint);
-            } else {
-                // Non-ASCII - encode as UTF-8
-                writeUtf8CodePoint(codePoint);
-            }
-            
+            putEscaped(codePoint);
+
             i += charCount;
         }
 
         buffer.put((byte) '"');
+    }
+
+    /** Streaming counterpart of the loop in writeQuotedString: sends rather than grows when full. */
+    private void putCodePointStreaming(int codePoint) throws IOException {
+        if (buffer.remaining() < 12) {
+            send();
+            if (buffer.remaining() < 12) {
+                growBuffer(12); // only for a buffer capacity smaller than one escaped character
+            }
+        }
+        putEscaped(codePoint);
+    }
+
+    /**
+     * Writes one code point inside a string, escaped if JSON requires it
+     * and UTF-8 encoded otherwise. At most 12 bytes: the caller guarantees
+     * that much room.
+     */
+    private void putEscaped(int codePoint) {
+        if (codePoint == '"') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) '"');
+        } else if (codePoint == '\\') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) '\\');
+        } else if (codePoint == '\b') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) 'b');
+        } else if (codePoint == '\f') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) 'f');
+        } else if (codePoint == '\n') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) 'n');
+        } else if (codePoint == '\r') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) 'r');
+        } else if (codePoint == '\t') {
+            buffer.put((byte) '\\');
+            buffer.put((byte) 't');
+        } else if (codePoint < 0x20) {
+            // Control character - escape as unicode
+            buffer.put((byte) '\\');
+            buffer.put((byte) 'u');
+            buffer.put((byte) '0');
+            buffer.put((byte) '0');
+            buffer.put((byte) hexChar((codePoint >> 4) & 0xF));
+            buffer.put((byte) hexChar(codePoint & 0xF));
+        } else if (codePoint < 0x80) {
+            // ASCII
+            buffer.put((byte) codePoint);
+        } else {
+            // Non-ASCII - encode as UTF-8
+            writeUtf8CodePoint(codePoint);
+        }
     }
 
     private void writeUtf8CodePoint(int codePoint) {

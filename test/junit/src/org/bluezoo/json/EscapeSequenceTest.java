@@ -20,7 +20,7 @@ public class EscapeSequenceTest {
         
         JSONParser parser = new JSONParser();
         parser.disableAllLimits();
-        parser.setContentHandler(new JSONDefaultHandler() {
+        parser.setContentHandler(new StringAssemblingHandler() {
             @Override
             public void stringValue(String value) {
                 result[0] = value;

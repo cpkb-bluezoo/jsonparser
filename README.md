@@ -58,9 +58,10 @@ via the SAX-like `JSONContentHandler` interface as soon as complete tokens
 are recognized. This allows it to operate as a **streaming transformer** in
 a data pipeline, converting raw byte chunks into semantic JSON events.
 
-When a token spans chunk boundaries, the parser copies the incomplete
-token's bytes into an internal `pending` buffer and prepends them to the
-next chunk. `receive()` therefore always consumes the whole buffer you pass
+When a key, number or literal, or the start of an escape sequence or
+multi-byte character inside a string, spans chunk boundaries, the parser
+copies the incomplete bytes into an internal `pending` buffer and prepends
+them to the next chunk. `receive()` therefore always consumes the whole buffer you pass
 it; calling `compact()` afterwards is harmless but not required. Tokens
 that arrive within a single chunk are tokenized in place with no copy.
 
@@ -89,8 +90,19 @@ public class AsyncJSONProcessor extends JSONDefaultHandler {
     }
     
     @Override
-    public void stringValue(String value) throws JSONException {
-        System.out.println("String: " + value);
+    public void startStringValue() throws JSONException {
+        System.out.print("String: ");
+    }
+
+    @Override
+    public void stringValueContent(CharSequence content) throws JSONException {
+        // Only valid during this call: print it, or copy it with toString()
+        System.out.print(content);
+    }
+
+    @Override
+    public void endStringValue() throws JSONException {
+        System.out.println();
     }
     
     public static void processChannel(ReadableByteChannel channel) 
@@ -133,28 +145,32 @@ This non-blocking approach means your application can:
 
 ### Memory behaviour
 
-Memory use is independent of document size, but it is **not constant**:
+Memory use does not depend on the size of the document, or on the length of
+any string value in it.
 
-- Structural tokens, numbers, literals and whitespace are small and bounded
-  (numbers by `setMaxNumberLength`, default 1000).
-- **Strings and keys are buffered until their closing quote arrives.**
-  `JSONContentHandler.stringValue(String)` and `key(String)` take a complete
-  value, so a string that spans several `receive()` chunks is held in the
-  internal `pending` buffer (growing by doubling) until it is complete, and
-  then materialized as a `String`. Peak memory is therefore proportional to
-  the largest single string or key, roughly 2-3 times its size in bytes in
-  the worst case.
-- Because the partial token is rescanned from its opening quote on each
-  chunk, a very large string delivered in small chunks also costs
-  time that grows faster than linearly with the string's length.
-- By default this is capped: `setMaxStringLength` (20,000,000) and
-  `setMaxNameLength` (4096). `disableAllLimits()`, or setting those limits
-  to 0, removes the cap, and a single huge string can then exhaust memory.
+- **String values are streamed.** A string is reported as
+  `startStringValue()`, any number of `stringValueContent(CharSequence)`
+  calls, then `endStringValue()`, as the bytes arrive. The parser decodes
+  into a character buffer of the same capacity as the byte buffer you pass
+  to `receive()` and hands it to your handler, so a 1GB string costs the
+  same as a 10 byte one. The content is only valid during the call because
+  the buffer is reused: copy it (for example `toString()`) if you need to
+  keep it, and treat it as provisional until `endStringValue()`, since a
+  malformed string is only detected when it is reached.
+- **Keys are single tokens.** `key(String)` takes a complete name, so a key
+  that spans chunks is held in the internal `pending` buffer until its
+  closing quote arrives. Keys are limited to `setMaxNameLength` bytes
+  (default 4096), so keep your receive buffer larger than that. Numbers and
+  literals are held the same way, and are tiny (`setMaxNumberLength`,
+  default 1000).
+- Nesting costs a little per open array or object (`setMaxNestingDepth`,
+  default 1000). The key-interning table holds at most 10,000 distinct keys.
+  `setRejectDuplicateKeys(true)` remembers every key of every open object,
+  so it is proportional to the document and is off by default.
 
-Truly constant-memory handling of large strings requires the handler to
-receive string content incrementally (start / content chunks / end events)
-instead of as one `String`. That is an incompatible change to
-`JSONContentHandler` and is planned for a future major release.
+If your handler assembles strings itself (for example into a
+`StringBuilder`), that memory is yours, and is exactly as large as the
+strings you choose to keep.
 
 ### Traditional Blocking API (Convenience)
 
@@ -202,7 +218,8 @@ recognized:
 - `startObject()` / `endObject()` - Object boundaries
 - `startArray()` / `endArray()` - Array boundaries  
 - `key(String)` - Object field names
-- `stringValue(String)` - String values
+- `startStringValue()` / `stringValueContent(CharSequence)` /
+  `endStringValue()` - String values, delivered as they arrive (see below)
 - `numberValue(Number)` - Numeric values
 - `booleanValue(boolean)` - Boolean values
 - `nullValue()` - Null values
@@ -270,6 +287,27 @@ public class MakeJohnSmith {
         writer.close();
     }
 
+}
+```
+
+`writeString(String)` is for when you already have the whole string. To
+write a string without holding it, mirror the parser's events:
+`writeStartString()`, any number of `writeStringContent(CharSequence)` calls
+(a surrogate pair may be split across two), then `writeEndString()`. The
+writer encodes and sends content as it is written rather than growing its
+buffer, so a handler can pipe the parser straight into a writer:
+
+```java
+public void startStringValue() throws JSONException {
+    writer.writeStartString();         // IOException handling omitted
+}
+
+public void stringValueContent(CharSequence content) throws JSONException {
+    writer.writeStringContent(content);
+}
+
+public void endStringValue() throws JSONException {
+    writer.writeEndString();
 }
 ```
 

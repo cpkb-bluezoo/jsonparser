@@ -28,17 +28,21 @@ import java.nio.ByteBuffer;
  * <ul>
  *   <li>The caller provides a buffer in read mode (ready for get operations)</li>
  *   <li>The parser consumes as many complete tokens as possible</li>
- *   <li>Any trailing incomplete token is copied into an internal buffer, so
- *       after {@link #receive(ByteBuffer)} returns the whole input buffer has
- *       been consumed ({@link ByteBuffer#compact()} is harmless but not
- *       required)</li>
+ *   <li>Any trailing incomplete token (a key, number or literal, or the start of
+ *       an escape sequence or multi-byte character in a string) is copied into
+ *       an internal buffer, so after {@link #receive(ByteBuffer)} returns the
+ *       whole input buffer has been consumed ({@link ByteBuffer#compact()} is
+ *       harmless but not required)</li>
  *   <li>The next {@code receive()} call prepends the carried-over bytes and
  *       continues from where parsing left off</li>
  * </ul>
- * <p><strong>Memory:</strong> memory use does not grow with document size,
- * but string values and keys are buffered until complete, so peak memory is
- * proportional to the largest single string or key (capped by
- * {@link #setMaxStringLength} / {@link #setMaxNameLength} by default).
+ * <p><strong>Memory:</strong> memory use does not grow with document size or
+ * string length. String values are streamed to the handler
+ * ({@link JSONContentHandler#startStringValue()},
+ * {@link JSONContentHandler#stringValueContent(CharSequence)},
+ * {@link JSONContentHandler#endStringValue()}) through a character buffer the
+ * size of the byte buffer passed to {@code receive}. Keys are delivered whole,
+ * so a key is held until complete (limited by {@link #setMaxNameLength}).
  *
  * <h3>Usage (Streaming)</h3>
  * <pre>{@code
@@ -443,6 +447,10 @@ public class JSONParser {
         }
 
         // Check tokenizer state for structural issues
+        if (tokenizer.isInString()) {
+            throw new JSONException("Unclosed string");
+        }
+
         if (!tokenizer.seenAnyToken) {
             throw new JSONException("No data");
         }

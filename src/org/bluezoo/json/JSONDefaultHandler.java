@@ -52,7 +52,15 @@ public class JSONDefaultHandler implements JSONContentHandler {
     }
 
     @Override
-    public void stringValue(String value) throws JSONException {
+    public void startStringValue() throws JSONException {
+    }
+
+    @Override
+    public void stringValueContent(CharSequence content) throws JSONException {
+    }
+
+    @Override
+    public void endStringValue() throws JSONException {
     }
 
     @Override

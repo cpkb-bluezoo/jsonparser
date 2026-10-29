@@ -61,19 +61,62 @@ public interface JSONContentHandler {
 
     /**
      * Notifies of a JSON number.
-     * @param number the number parsed: may be an Integer, Long, or Double
+     * @param number the number parsed: an Integer, Long or Double, or a
+     * BigInteger for an integer too large for a Long
      * @throws JSONException the client may throw an exception during
      * processing
      */
     public void numberValue(Number number) throws JSONException;
 
     /**
-     * Notifies of a JSON string.
-     * @param value the string value, unescaped and unquoted
+     * Indicates the start of a JSON string value, at its opening quote. The
+     * characters of the string follow in zero or more
+     * {@link #stringValueContent(CharSequence)} calls, and the string ends
+     * with {@link #endStringValue()}.
+     * <p>
+     * Object keys are not reported this way: a key is a single token
+     * delivered whole to {@link #key(String)}.
      * @throws JSONException the client may throw an exception during
      * processing
      */
-    public void stringValue(String value) throws JSONException;
+    public void startStringValue() throws JSONException;
+
+    /**
+     * Notifies of the next characters of the current string value,
+     * unescaped and unquoted. The value of the string is the concatenation
+     * of the content of every call between {@link #startStringValue()} and
+     * {@link #endStringValue()}. How it is divided into calls is arbitrary
+     * and depends on how the input arrived and on the parser's buffer size,
+     * so a handler must not attach any meaning to the boundaries.
+     * <p>
+     * The parser never passes empty content, and never splits a surrogate
+     * pair across two calls.
+     * <p>
+     * <strong>The content is only valid until this method returns.</strong>
+     * The parser reuses the underlying buffer, so a handler that needs the
+     * characters afterwards must copy them (for example with
+     * {@code toString()}).
+     * <p>
+     * Content is delivered as it is read, before the rest of the string has
+     * been seen. If the string turns out to be malformed (an invalid
+     * escape sequence, invalid UTF-8, an unescaped control character, or a
+     * length limit exceeded), the parser throws a {@link JSONException},
+     * possibly after some of the string's content has already been
+     * delivered, so a handler should treat the content as provisional until
+     * {@link #endStringValue()}.
+     * @param content the next characters of the string
+     * @throws JSONException the client may throw an exception during
+     * processing
+     */
+    public void stringValueContent(CharSequence content) throws JSONException;
+
+    /**
+     * Indicates the end of the current JSON string value, at its closing
+     * quote.
+     * @throws JSONException the client may throw an exception during
+     * processing
+     */
+    public void endStringValue() throws JSONException;
 
     /**
      * Notifies of a JSON boolean value.
