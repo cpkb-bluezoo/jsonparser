@@ -57,6 +57,38 @@ class JSONTokenizer implements JSONLocator {
     private boolean inString;
     private long stringBytes; // raw content bytes of the current string value consumed so far
     private CharBuffer chars;
+
+    // A number is read in a single forward pass, one byte at a time, keeping
+    // only the value so far. It therefore needs no look-ahead and no
+    // buffering, and can span any number of receive() calls. It ends at the
+    // first byte that cannot continue it (left unconsumed), or at end of input.
+    private static final int NUM_NONE = 0;
+    private static final int NUM_AFTER_MINUS = 1;     // "-" seen: a digit must follow
+    private static final int NUM_ZERO = 2;            // a leading "0": no more integer digits allowed
+    private static final int NUM_INTEGER = 3;         // integer digits 1-9...
+    private static final int NUM_FRACTION_DOT = 4;    // "." seen: a digit must follow
+    private static final int NUM_FRACTION = 5;        // fraction digits
+    private static final int NUM_EXPONENT_MARK = 6;   // "e" or "E" seen: a sign or digit must follow
+    private static final int NUM_EXPONENT_SIGN = 7;   // exponent sign seen: a digit must follow
+    private static final int NUM_EXPONENT = 8;        // exponent digits
+
+    private int numberState = NUM_NONE;
+    private boolean numberNegative;
+    private boolean numberIsReal;     // has a fraction and/or an exponent
+    private int numberLength;         // bytes of the number so far, for maxNumberLength and the locator
+    private long mantissa;            // all integer and fraction digits read as one integer, as many as fit a long
+    private boolean mantissaFull;     // a further digit would overflow mantissa, so later digits are dropped
+    private int decimalShift;         // power of ten to scale mantissa by (fraction digits kept, integer digits dropped)
+    private boolean droppedNonZero;   // a dropped digit was not zero, so the true value is above mantissa
+    private int firstDropped;         // the first dropped digit, or -1
+    private boolean exponentNegative;
+    private int exponent;             // exponent digits, saturating (anything this large is infinity or zero)
+    // An integer too large for a long is kept exactly, 18 digits at a time
+    private BigInteger bigInteger;
+    private long bigChunk;
+    private int bigChunkDigits;
+
+    private static final BigInteger TEN_POW_18 = BigInteger.valueOf(1_000_000_000_000_000_000L);
     private boolean needsWhitespace; // Whether handler needs whitespace events
 
     private int lineNumber = 1;
@@ -165,9 +197,29 @@ class JSONTokenizer implements JSONLocator {
         return closed;
     }
 
-    /** Whether a string value has been started but its closing quote not yet seen. */
-    boolean isInString() {
-        return inString;
+    /**
+     * Called when no more input will arrive. Completes a number that ends
+     * the document (such as the whole document {@code 42}), and rejects
+     * anything left unfinished.
+     */
+    void endOfInput() throws JSONException {
+        if (inString) {
+            throw new JSONException("Unclosed string");
+        }
+        switch (numberState) {
+            case NUM_NONE:
+                return;
+            case NUM_AFTER_MINUS:
+                throw new JSONException("Invalid number: just '-'");
+            case NUM_FRACTION_DOT:
+                throw new JSONException("Decimal point must be followed by digit");
+            case NUM_EXPONENT_MARK:
+                throw new JSONException("Incomplete exponent");
+            case NUM_EXPONENT_SIGN:
+                throw new JSONException("Exponent must have digit");
+            default:
+                emitNumber();
+        }
     }
 
     /**
@@ -180,6 +232,12 @@ class JSONTokenizer implements JSONLocator {
         while (data.hasRemaining()) {
             if (inString) {
                 if (!continueString(data)) {
+                    return;
+                }
+                continue;
+            }
+            if (numberState != NUM_NONE) {
+                if (!continueNumber(data)) {
                     return;
                 }
                 continue;
@@ -211,10 +269,11 @@ class JSONTokenizer implements JSONLocator {
 
             // Update column number based on bytes consumed
             // (but not for whitespace, which handles its own line/column tracking,
-            // and not for strings, which handle their own column tracking since a
+            // not for strings, which handle their own column tracking since a
             // string's byte length and its UTF-16 source-character count can differ
-            // once multi-byte UTF-8 content or escape sequences are involved)
-            if (!isWhitespace && b != '"') {
+            // once multi-byte UTF-8 content or escape sequences are involved, and
+            // not for numbers, which add their length once they have ended)
+            if (!isWhitespace && b != '"' && b != '-' && (b < '0' || b > '9')) {
                 int bytesConsumed = data.position() - startPos;
                 columnNumber += bytesConsumed;
             }
@@ -431,15 +490,12 @@ class JSONTokenizer implements JSONLocator {
                     if (state != State.EXPECT_VALUE) {
                         throw new JSONException("Unexpected number");
                     }
-                    if (!processNumber(b, data)) {
-                        return false;
-                    }
+                    startNumber(b, data);
                     seenAnyToken = true;
                     if (limits.maxTokenCount > 0 && ++tokenCount > limits.maxTokenCount) {
                         throw new JSONException("Maximum token count exceeded: " + limits.maxTokenCount);
                     }
                     afterComma = false;
-                    state = State.AFTER_VALUE;
                     return true;
                 }
                 throw new JSONException("Unexpected character: " + (char) (b & 0xFF));
@@ -1141,271 +1197,293 @@ class JSONTokenizer implements JSONLocator {
     }
 
     /**
-     * Process a number token.
-     * First byte already consumed.
-     * DO NOT call mark() - the mark is set by receive() at the start of the token.
-     * <p>
-     * Grammar validation/boundary-scanning is unchanged from before (still
-     * byte-by-byte); what's new is that the integer, fractional, and
-     * exponent digits are accumulated into {@code long}/{@code int}
-     * counters as they're scanned, so the numeric value can usually be
-     * composed directly with no further scan or {@code String} allocation -
-     * falling back to a full {@code String} extraction only in the (rare)
-     * case of an overflowing number of significant digits.
+     * Starts a number at its first byte, {@code '-'} or a digit. A number
+     * that ends within {@code data} (the usual case for an integer) is
+     * completed straight away; otherwise its state is kept for
+     * {@link #continueNumber}.
      */
-    private boolean processNumber(byte first, ByteBuffer data) throws JSONException {
-        int startPos = data.position() - 1; // before first byte
-
-        boolean negative = (first == '-');
-
-        long ival = 0;
-        boolean intOverflow = false;
-
-        byte c = first;
-        if (negative) {
-            if (!data.hasRemaining()) {
-                if (!closed) {
-                    return false; // Need more data
-                }
-                throw new JSONException("Invalid number: just '-'");
-            }
-            c = data.get();
+    private void startNumber(byte first, ByteBuffer data) throws JSONException {
+        numberNegative = (first == '-');
+        numberIsReal = false;
+        numberLength = 1;
+        mantissa = 0;
+        mantissaFull = false;
+        decimalShift = 0;
+        exponent = 0;
+        exponentNegative = false;
+        bigInteger = null;
+        if (numberNegative) {
+            numberState = NUM_AFTER_MINUS;
+            return;
         }
-
-        // Integer part
-        if (c == '0') {
-            // After 0, next must not be a digit (no leading zeros)
-            if (data.hasRemaining()) {
-                int savedPos = data.position();
-                byte next = data.get();
-                if (next >= '0' && next <= '9') {
-                    throw new JSONException("Numbers cannot have leading zeros");
+        if (first == '0') {
+            numberState = NUM_ZERO;
+        } else {
+            numberState = NUM_INTEGER;
+            mantissa = first - '0';
+            if (data.hasArray()) {
+                takeDigitRun(data);
+                int lengthLimit = limits.maxNumberLength;
+                if (lengthLimit > 0 && numberLength > lengthLimit) {
+                    throw new JSONException("Maximum number length exceeded: " + lengthLimit);
                 }
-                // Backtrack - we'll re-read for fractional/exponent check
-                data.position(savedPos);
-            } else if (!closed) {
-                return false; // Might be 0.5 coming
             }
-        } else if (c >= '1' && c <= '9') {
-            ival = c - '0';
-            // Consume remaining digits
-            boolean sawNonDigit = false;
-            while (data.hasRemaining()) {
-                int savedPos = data.position();
-                byte d = data.get();
-                if (d >= '0' && d <= '9') {
-                    if (!intOverflow) {
-                        int digit = d - '0';
-                        if (ival > (Long.MAX_VALUE - digit) / 10) {
-                            intOverflow = true;
-                        } else {
-                            ival = ival * 10 + digit;
-                        }
-                    }
-                } else {
-                    // Non-digit - backtrack
-                    data.position(savedPos);
-                    sawNonDigit = true;
+        }
+        // An integer followed by something that cannot continue it is
+        // complete: no need to go round the main loop to find that out
+        if (data.hasRemaining()) {
+            byte next = data.get(data.position());
+            if ((next < '0' || next > '9') && next != '.' && next != 'e' && next != 'E') {
+                emitNumber();
+            }
+        }
+    }
+
+    /**
+     * Continues the number in progress with the bytes of {@code data}.
+     *
+     * @return true if the number ended (at a byte left unconsumed in
+     *         {@code data}), false if {@code data} ran out first
+     */
+    private boolean continueNumber(ByteBuffer data) throws JSONException {
+        int lengthLimit = limits.maxNumberLength;
+        while (data.hasRemaining()) {
+            if (data.hasArray() && !mantissaFull
+                    && (numberState == NUM_INTEGER || numberState == NUM_FRACTION)) {
+                takeDigitRun(data);
+                if (lengthLimit > 0 && numberLength > lengthLimit) {
+                    throw new JSONException("Maximum number length exceeded: " + lengthLimit);
+                }
+                if (!data.hasRemaining()) {
                     break;
                 }
             }
-
-            if (!sawNonDigit && !closed) {
-                return false; // Might be more digits or . or e coming
-            }
-        } else {
-            throw new JSONException("Invalid number format");
-        }
-
-        boolean hasFraction = false;
-        long dval = 0;
-        long mul = 1;
-        boolean fracOverflow = false;
-
-        // Optional fractional part
-        if (data.hasRemaining()) {
-            int savedPos = data.position();
-            byte c2 = data.get();
-            if (c2 == '.') {
-                hasFraction = true;
-
-                // Must have at least one digit after decimal
-                if (!data.hasRemaining()) {
-                    if (!closed) {
-                        return false;
-                    }
-                    throw new JSONException("Decimal point must be followed by digit");
-                }
-
-                byte digit = data.get();
-                if (digit < '0' || digit > '9') {
-                    throw new JSONException("Decimal point must be followed by digit");
-                }
-                dval = digit - '0';
-                mul = 10;
-
-                // Consume remaining fractional digits
-                while (data.hasRemaining()) {
-                    int pos = data.position();
-                    byte d = data.get();
-                    if (d >= '0' && d <= '9') {
-                        if (!fracOverflow) {
-                            int dg = d - '0';
-                            if (mul > Long.MAX_VALUE / 10 || dval > (Long.MAX_VALUE - dg) / 10) {
-                                fracOverflow = true;
-                            } else {
-                                dval = dval * 10 + dg;
-                                mul *= 10;
-                            }
-                        }
+            byte b = data.get();
+            int digit = b - '0';
+            boolean isDigit = digit >= 0 && digit <= 9;
+            switch (numberState) {
+                case NUM_AFTER_MINUS:
+                    if (b == '0') {
+                        numberState = NUM_ZERO;
+                    } else if (isDigit) {
+                        numberState = NUM_INTEGER;
+                        takeDigit(digit, false);
                     } else {
-                        data.position(pos);
-                        break;
+                        throw new JSONException("Invalid number format");
                     }
-                }
-
-                if (!data.hasRemaining() && !closed) {
-                    return false; // Might be 'e' coming
-                }
-            } else {
-                // Not decimal point - backtrack; the byte we just peeked at
-                // (c2) will be re-examined below for a possible exponent.
-                data.position(savedPos);
-            }
-        } else if (!closed) {
-            return false; // Might be . or e coming
-        }
-
-        boolean hasExponent = false;
-        boolean expNegative = false;
-        int exponent = 0;
-        boolean expOverflow = false;
-
-        // Optional exponent part - checked exactly once here, regardless of
-        // whether a fractional part was present above.
-        if (data.hasRemaining()) {
-            int savedPos = data.position();
-            byte c2 = data.get();
-            if (c2 == 'e' || c2 == 'E') {
-                hasExponent = true;
-
-                if (!data.hasRemaining()) {
-                    if (!closed) {
-                        return false;
+                    break;
+                case NUM_ZERO:
+                    if (isDigit) {
+                        throw new JSONException("Numbers cannot have leading zeros");
+                    } else if (b == '.') {
+                        numberIsReal = true;
+                        numberState = NUM_FRACTION_DOT;
+                    } else if (b == 'e' || b == 'E') {
+                        startExponent();
+                    } else {
+                        return endNumber(data);
                     }
-                    throw new JSONException("Incomplete exponent");
-                }
-                byte sign = data.get();
-                if (sign == '+' || sign == '-') {
-                    expNegative = (sign == '-');
-                    if (!data.hasRemaining()) {
-                        if (!closed) {
-                            return false;
-                        }
+                    break;
+                case NUM_INTEGER:
+                    if (isDigit) {
+                        takeDigit(digit, false);
+                    } else if (b == '.') {
+                        numberIsReal = true;
+                        numberState = NUM_FRACTION_DOT;
+                    } else if (b == 'e' || b == 'E') {
+                        startExponent();
+                    } else {
+                        return endNumber(data);
+                    }
+                    break;
+                case NUM_FRACTION_DOT:
+                    if (!isDigit) {
+                        throw new JSONException("Decimal point must be followed by digit");
+                    }
+                    numberState = NUM_FRACTION;
+                    takeDigit(digit, true);
+                    break;
+                case NUM_FRACTION:
+                    if (isDigit) {
+                        takeDigit(digit, true);
+                    } else if (b == 'e' || b == 'E') {
+                        startExponent();
+                    } else {
+                        return endNumber(data);
+                    }
+                    break;
+                case NUM_EXPONENT_MARK:
+                    if (b == '+' || b == '-') {
+                        exponentNegative = (b == '-');
+                        numberState = NUM_EXPONENT_SIGN;
+                    } else if (isDigit) {
+                        numberState = NUM_EXPONENT;
+                        takeExponentDigit(digit);
+                    } else {
                         throw new JSONException("Exponent must have digit");
                     }
-                    sign = data.get();
-                }
-                if (sign < '0' || sign > '9') {
-                    throw new JSONException("Exponent must have digit");
-                }
-                exponent = sign - '0';
-
-                while (data.hasRemaining()) {
-                    int pos = data.position();
-                    byte d = data.get();
-                    if (d >= '0' && d <= '9') {
-                        if (!expOverflow) {
-                            exponent = exponent * 10 + (d - '0');
-                            if (exponent > 100_000) {
-                                // Anything beyond this over/underflows to Infinity/0
-                                // regardless - not worth tracking precisely, just
-                                // route to the slow (String) path below.
-                                expOverflow = true;
-                            }
-                        }
-                    } else {
-                        data.position(pos);
-                        break;
+                    break;
+                case NUM_EXPONENT_SIGN:
+                    if (!isDigit) {
+                        throw new JSONException("Exponent must have digit");
                     }
-                }
-
-                if (!data.hasRemaining() && !closed) {
-                    return false; // Might be more exponent digits
-                }
-            } else {
-                // Not exponent - backtrack; number is complete.
-                data.position(savedPos);
+                    numberState = NUM_EXPONENT;
+                    takeExponentDigit(digit);
+                    break;
+                case NUM_EXPONENT:
+                    if (isDigit) {
+                        takeExponentDigit(digit);
+                    } else {
+                        return endNumber(data);
+                    }
+                    break;
+                default:
+                    throw new IllegalStateException("Not in a number");
             }
-        } else if (!closed) {
-            return false; // Might be e/E coming
+            numberLength++;
+            if (lengthLimit > 0 && numberLength > lengthLimit) {
+                throw new JSONException("Maximum number length exceeded: " + lengthLimit);
+            }
         }
+        return false;
+    }
 
-        if (limits.maxNumberLength > 0 && data.position() - startPos > limits.maxNumberLength) {
-            throw new JSONException("Maximum number length exceeded: " + limits.maxNumberLength);
+    private void startExponent() {
+        numberIsReal = true;
+        numberState = NUM_EXPONENT_MARK;
+    }
+
+    // While the mantissa is at most this, any next digit fits a long
+    private static final long DIGIT_ALWAYS_FITS_BELOW = 922337203685477579L;
+
+    /**
+     * Takes a whole run of integer or fraction digits at once, working on
+     * local copies of the accumulators. This is the common case in numeric
+     * data, so it avoids the per-byte state dispatch. Stops at the first
+     * byte that is not a digit, or when the mantissa nears overflow; the
+     * general code then deals with that byte.
+     */
+    private void takeDigitRun(ByteBuffer data) {
+        byte[] arr = data.array();
+        int off = data.arrayOffset();
+        int start = data.position();
+        int end = data.limit();
+        int p = start;
+        long m = mantissa;
+        while (p < end && m <= DIGIT_ALWAYS_FITS_BELOW) {
+            int digit = arr[off + p] - '0';
+            if (digit < 0 || digit > 9) {
+                break;
+            }
+            m = m * 10 + digit;
+            p++;
         }
+        int taken = p - start;
+        if (taken > 0) {
+            mantissa = m;
+            if (numberState == NUM_FRACTION) {
+                decimalShift -= taken;
+            }
+            numberLength += taken;
+            data.position(p);
+        }
+    }
 
-        // Compose and report the number
-        Number num = composeNumber(data, startPos, negative, ival, intOverflow,
-                hasFraction, dval, mul, fracOverflow,
-                hasExponent, expNegative, exponent, expOverflow);
-        handler.numberValue(num);
+    /** The last byte read does not belong to the number: give it back and report the number. */
+    private boolean endNumber(ByteBuffer data) throws JSONException {
+        data.position(data.position() - 1);
+        emitNumber();
         return true;
     }
 
     /**
-     * Composes the final {@link Number} from the digit accumulators built up
-     * while scanning the number's grammar in {@link #processNumber}: avoid a
-     * {@code String} allocation and a full {@code Double.parseDouble}/
-     * {@code BigInteger} parse for the common case by composing the value
-     * directly from the accumulated digits, falling back to a full
-     * {@code String} extraction only when an accumulator overflowed (an
-     * unusually large number of significant digits).
+     * Adds one digit of the integer part or the fraction. Digits are read
+     * into {@link #mantissa} until the next would overflow a long; after
+     * that they are dropped (integer digits still scale the value, and
+     * still feed {@link #bigInteger} so a plain integer stays exact).
      */
-    private Number composeNumber(ByteBuffer data, int startPos, boolean negative,
-                                  long ival, boolean intOverflow,
-                                  boolean hasFraction, long dval, long mul, boolean fracOverflow,
-                                  boolean hasExponent, boolean expNegative, int exponent, boolean expOverflow)
-            throws JSONException {
-        int endPos = data.position();
-
-        if (!hasFraction && !hasExponent) {
-            // Plain integer
-            if (intOverflow) {
-                String numStr = decodeSpan(data, startPos, endPos, false);
-                try {
-                    return new BigInteger(numStr);
-                } catch (NumberFormatException e) {
-                    throw new JSONException("Invalid number: " + numStr, e);
+    private void takeDigit(int digit, boolean fraction) {
+        if (!mantissaFull) {
+            if (mantissa <= (Long.MAX_VALUE - digit) / 10) {
+                mantissa = mantissa * 10 + digit;
+                if (fraction) {
+                    decimalShift--;
                 }
+                return;
             }
-            long value = negative ? -ival : ival;
-            if (value >= Integer.MIN_VALUE && value <= Integer.MAX_VALUE) {
-                return Integer.valueOf((int) value);
+            mantissaFull = true;
+            droppedNonZero = false;
+            firstDropped = -1;
+            if (!fraction) {
+                bigInteger = BigInteger.valueOf(mantissa);
+                bigChunk = 0;
+                bigChunkDigits = 0;
             }
-            return Long.valueOf(value);
         }
+        if (!fraction) {
+            decimalShift++;
+            bigChunk = bigChunk * 10 + digit;
+            if (++bigChunkDigits == 18) {
+                bigInteger = bigInteger.multiply(TEN_POW_18).add(BigInteger.valueOf(bigChunk));
+                bigChunk = 0;
+                bigChunkDigits = 0;
+            }
+        }
+        if (digit != 0) {
+            droppedNonZero = true;
+        }
+        if (firstDropped < 0) {
+            firstDropped = digit;
+        }
+    }
 
-        // Real number (has a fractional part and/or an exponent). The value
-        // is exactly digits * 10^e10, where digits is the integer and
-        // fractional digits read as one integer. When that fits a long it is
-        // converted without allocating (see DecimalToDouble); a number with
-        // more significant digits than that is converted from its text.
-        if (!intOverflow && !fracOverflow && !expOverflow && ival <= (Long.MAX_VALUE - dval) / mul) {
-            long digits = ival * mul + dval;
-            int fractionDigits = 0;
-            for (long m = mul; m > 1; m /= 10) {
-                fractionDigits++;
-            }
-            int e10 = (expNegative ? -exponent : exponent) - fractionDigits;
-            return Double.valueOf(DecimalToDouble.convert(negative, digits, e10));
+    private void takeExponentDigit(int digit) {
+        if (exponent < 100_000) {
+            exponent = exponent * 10 + digit;
         }
+    }
 
-        String numStr = decodeSpan(data, startPos, endPos, false);
-        try {
-            return Double.valueOf(numStr);
-        } catch (NumberFormatException e) {
-            throw new JSONException("Invalid number: " + numStr, e);
+    /** Reports the finished number to the handler. */
+    private void emitNumber() throws JSONException {
+        Number number = numberIsReal ? realValue() : integerValue();
+        numberState = NUM_NONE;
+        state = State.AFTER_VALUE;
+        handler.numberValue(number);
+        columnNumber += numberLength;
+    }
+
+    private Number integerValue() {
+        if (bigInteger != null) {
+            BigInteger value = bigInteger;
+            if (bigChunkDigits > 0) {
+                value = value.multiply(BigInteger.TEN.pow(bigChunkDigits)).add(BigInteger.valueOf(bigChunk));
+            }
+            return numberNegative ? value.negate() : value;
         }
+        long value = numberNegative ? -mantissa : mantissa;
+        if (value >= Integer.MIN_VALUE && value <= Integer.MAX_VALUE) {
+            return Integer.valueOf((int) value);
+        }
+        return Long.valueOf(value);
+    }
+
+    /**
+     * The double nearest to the number. Exact (as {@link Double#parseDouble}
+     * would give) when its significant digits fit {@link #mantissa}. If more
+     * digits were dropped the true value lies strictly between mantissa and
+     * mantissa + 1 (in units of the shift), so the double is the same for
+     * both ends unless a rounding boundary falls between them; in that rare
+     * case the nearer end, judged by the first dropped digit, is used and the
+     * result may be one ulp out.
+     */
+    private Number realValue() {
+        int e10 = (exponentNegative ? -exponent : exponent) + decimalShift;
+        if (!(mantissaFull && droppedNonZero)) {
+            return Double.valueOf(DecimalToDouble.convert(numberNegative, mantissa, e10));
+        }
+        double low = DecimalToDouble.convert(false, mantissa, e10);
+        double high = mantissa == Long.MAX_VALUE ? low : DecimalToDouble.convert(false, mantissa + 1, e10);
+        double value = (low == high || firstDropped < 5) ? low : high;
+        return Double.valueOf(numberNegative ? -value : value);
     }
 }

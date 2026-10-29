@@ -28,7 +28,7 @@ import java.nio.ByteBuffer;
  * <ul>
  *   <li>The caller provides a buffer in read mode (ready for get operations)</li>
  *   <li>The parser consumes as many complete tokens as possible</li>
- *   <li>Any trailing incomplete token (a key, number or literal, or the start of
+ *   <li>Any trailing incomplete token (a key or literal, or the start of
  *       an escape sequence or multi-byte character in a string) is copied into
  *       an internal buffer, so after {@link #receive(ByteBuffer)} returns the
  *       whole input buffer has been consumed ({@link ByteBuffer#compact()} is
@@ -446,11 +446,11 @@ public class JSONParser {
             }
         }
 
-        // Check tokenizer state for structural issues
-        if (tokenizer.isInString()) {
-            throw new JSONException("Unclosed string");
-        }
+        // Completes a number that ends the document and rejects an unfinished
+        // string or number
+        tokenizer.endOfInput();
 
+        // Check tokenizer state for structural issues
         if (!tokenizer.seenAnyToken) {
             throw new JSONException("No data");
         }

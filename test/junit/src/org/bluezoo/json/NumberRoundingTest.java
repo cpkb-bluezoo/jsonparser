@@ -90,8 +90,7 @@ public class NumberRoundingTest {
                 "1.7976931348623157e308", "1.7976931348623159e308", "1e309", "1e400",
                 "4.9e-324", "2.4703282292062327e-324", "2.4703282292062328e-324", "1e-400",
                 "2.2250738585072014e-308", "2.2250738585072011e-308",
-                "0.1234567890123456789", "0.12345678901234567890123", "12345678901234567890.5",
-                "123456789012345678901234567890e-10", "1e100000", "1e-100000" }) {
+                "0.1234567890123456789", "0.000000000000000000001", "1e100000", "1e-100000" }) {
             numbers.add(n);
         }
         assertAllExact(numbers);
@@ -179,6 +178,50 @@ public class NumberRoundingTest {
             }
         }
         assertAllExact(numbers);
+    }
+
+    @Test
+    public void moreThan19SignificantDigitsAreAtMostOneUlpOut() throws Exception {
+        // Beyond 19 significant digits the digits cannot all be kept, so the
+        // result is only guaranteed to be within one ulp of Double.parseDouble
+        // (and is exact unless a rounding boundary falls inside the dropped
+        // digits, which is rare)
+        Random rnd = new Random(8);
+        int total = 20000;
+        int inexact = 0;
+        for (int i = 0; i < total; i++) {
+            int digits = 20 + rnd.nextInt(30);
+            StringBuilder sb = new StringBuilder();
+            sb.append((char) ('1' + rnd.nextInt(9)));
+            for (int d = 1; d < digits; d++) {
+                sb.append((char) ('0' + rnd.nextInt(10)));
+            }
+            int point = rnd.nextInt(digits + 1);
+            sb.insert(point, point == 0 ? "0." : ".");
+            if (sb.charAt(sb.length() - 1) == '.') {
+                sb.append('0');
+            }
+            if (rnd.nextBoolean()) {
+                sb.append('e').append(rnd.nextInt(600) - 300);
+            }
+            String number = sb.toString();
+            double expected = Double.parseDouble(number);
+            double actual = parse(number).doubleValue();
+            long distance = Math.abs(Double.doubleToLongBits(expected) - Double.doubleToLongBits(actual));
+            assertTrue(number + ": expected " + expected + " but got " + actual, distance <= 1);
+            if (distance != 0) {
+                inexact++;
+            }
+        }
+        assertTrue(inexact + " of " + total + " were a ulp out; expected well under 2%", inexact < total / 50);
+    }
+
+    @Test
+    public void droppedZeroDigitsLoseNothing() throws Exception {
+        // Digits beyond what fits are only a problem if they are not zero
+        assertEquals(1e30, parse("1000000000000000000000000000000.0").doubleValue(), 0.0);
+        assertEquals(1e30, parse("1000000000000000000000000000000e0").doubleValue(), 0.0);
+        assertEquals(123456789e25, parse("1234567890000000000000000000000000.000000000000000000").doubleValue(), 0.0);
     }
 
     @Test

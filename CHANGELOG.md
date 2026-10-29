@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path where one IEEE operation suffices and the Eisel-Lemire algorithm
   otherwise (new internal class `DecimalToDouble`; its table of powers of
   five is generated on first use). Numbers with more significant digits than
-  that are converted from the number text by the JDK.
+  that are covered under "Changed".
 - `JSONLocator` positions depend on how the input is chunked no longer: the
   first space or tab of every whitespace run was not counted in the column,
   so the reported column varied with the `receive()` chunk boundaries (and
@@ -71,6 +71,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detected when it is reached. `key(String)` and `whitespace(String)` are
   unchanged. To migrate a handler that needs the whole string, append the
   content to a `StringBuilder` and use it in `endStringValue()`.
+- Numbers are read in a single forward pass, one byte at a time, keeping
+  only a few counters (the digits so far, the power of ten to scale them by,
+  and the exponent) instead of looking ahead for the end of the number and
+  re-reading it. A number can therefore span any number of `receive()` calls
+  without being held, and `close()` completes a number that ends the
+  document from that state. A number is still reported when the next byte
+  shows it has ended. Integers beyond a `long` stay exact as a `BigInteger`.
+  A real number with more than 19 significant digits is now converted using
+  19 of them (previously the whole text went to `Double.parseDouble`): the
+  result is the same double unless a rounding boundary falls inside the
+  dropped digits, which is roughly 1 in a few hundred to a few thousand such
+  numbers, and then it can be one ulp out. Real numbers with 19 or fewer
+  significant digits are exactly rounded, as before.
 - **Breaking:** the `JSONLocator` position reported with `endStringValue()`
   is after the closing quote; `startStringValue()` reports the position
   before the opening quote, where `stringValue(String)` used to.

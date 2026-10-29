@@ -58,10 +58,10 @@ via the SAX-like `JSONContentHandler` interface as soon as complete tokens
 are recognized. This allows it to operate as a **streaming transformer** in
 a data pipeline, converting raw byte chunks into semantic JSON events.
 
-When a key, number or literal, or the start of an escape sequence or
-multi-byte character inside a string, spans chunk boundaries, the parser
-copies the incomplete bytes into an internal `pending` buffer and prepends
-them to the next chunk. `receive()` therefore always consumes the whole buffer you pass
+When a key or literal, or the start of an escape sequence or multi-byte
+character inside a string, spans chunk boundaries, the parser copies the
+incomplete bytes into an internal `pending` buffer and prepends them to the
+next chunk. Strings and numbers never wait: they are read as they arrive. `receive()` therefore always consumes the whole buffer you pass
 it; calling `compact()` afterwards is harmless but not required. Tokens
 that arrive within a single chunk are tokenized in place with no copy.
 
@@ -160,9 +160,20 @@ any string value in it.
 - **Keys are single tokens.** `key(String)` takes a complete name, so a key
   that spans chunks is held in the internal `pending` buffer until its
   closing quote arrives. Keys are limited to `setMaxNameLength` bytes
-  (default 4096), so keep your receive buffer larger than that. Numbers and
-  literals are held the same way, and are tiny (`setMaxNumberLength`,
-  default 1000).
+  (default 4096), so keep your receive buffer larger than that. Literals
+  (`true`, `false`, `null`) are held the same way, and are tiny.
+- **Numbers are read a byte at a time** into a handful of counters, so a
+  number can span any number of chunks without being held. A number has no
+  closing delimiter, so it is reported when the next byte shows it has
+  ended; a number that is the very end of the document (the whole document
+  `42`) is reported by `close()`. `setMaxNumberLength` (default 1000) still
+  limits how long one can be. Integers are always exact (a `BigInteger`
+  beyond a `long`). A real number with more than 19 significant digits is
+  converted using 19 of them, which gives the same double as
+  `Double.parseDouble` except when a rounding boundary falls inside the
+  digits dropped (roughly 1 in a few hundred to a few thousand such
+  numbers), when it can be one unit in the last place out. Real numbers with
+  19 or fewer significant digits are always exactly rounded.
 - Nesting costs a little per open array or object (`setMaxNestingDepth`,
   default 1000). The key-interning table holds at most 10,000 distinct keys.
   `setRejectDuplicateKeys(true)` remembers every key of every open object,
