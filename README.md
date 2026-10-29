@@ -58,12 +58,13 @@ via the SAX-like `JSONContentHandler` interface as soon as complete tokens
 are recognized. This allows it to operate as a **streaming transformer** in
 a data pipeline, converting raw byte chunks into semantic JSON events.
 
-When a key or literal, or the start of an escape sequence or multi-byte
-character inside a string, spans chunk boundaries, the parser copies the
-incomplete bytes into an internal `pending` buffer and prepends them to the
-next chunk. Strings and numbers never wait: they are read as they arrive. `receive()` therefore always consumes the whole buffer you pass
-it; calling `compact()` afterwards is harmless but not required. Tokens
-that arrive within a single chunk are tokenized in place with no copy.
+The parser holds none of your bytes. Strings and numbers never wait: they
+are read as they arrive. What it cannot use yet (a key or literal that has
+not finished, the start of an escape sequence or multi-byte character inside
+a string, a partial byte order mark) is simply left unconsumed in your
+buffer, with `position()` stopped at it. You `compact()` the buffer, read
+more data in after it, and present it again. This is the standard NIO
+pattern, and tokens are tokenized in place with no copy.
 
 **Core Methods:**
 - `receive(ByteBuffer data)` - Push a chunk of bytes into the parser
@@ -71,8 +72,14 @@ that arrive within a single chunk are tokenized in place with no copy.
 
 **Buffer Contract:**
 - Provide the buffer in read mode (after `flip()`)
-- After `receive()` returns, `buffer.position()` indicates unconsumed data
-- If `position() < limit()`, call `compact()` before reading more data
+- After `receive()` returns, `buffer.position()` is where unconsumed bytes
+  begin; there are none if `position() == limit()`
+- Call `compact()` (not `clear()`) before reading more data, so those bytes
+  are presented again at the head of the next call. The parser checks this
+  and throws if they are missing or changed
+- The buffer must be larger than the longest key (`setMaxNameLength`,
+  default 4096, plus its two quotes). If it fills with one unfinished token,
+  `receive()` throws instead of waiting for data that cannot fit
 - This zero-copy design minimizes allocations and GC pressure
 
 #### Async Streaming Example (NIO Channel)
@@ -118,12 +125,8 @@ public class AsyncJSONProcessor extends JSONDefaultHandler {
             buffer.compact();           // Preserve unconsumed bytes
         }
         
-        // Process any remaining data
-        buffer.flip();
-        if (buffer.hasRemaining()) {
-            parser.receive(buffer);
-        }
-        
+        // Bytes still unconsumed here are an incomplete token, which
+        // close() reports along with any other incompleteness
         parser.close();  // Validate document completeness
     }
 }
@@ -146,7 +149,9 @@ This non-blocking approach means your application can:
 ### Memory behaviour
 
 Memory use does not depend on the size of the document, or on the length of
-any string value in it.
+any string value in it. The parser holds none of the document's bytes: it has
+the buffer you pass to `receive()`, and a character buffer of the same
+capacity that string content is decoded into.
 
 - **String values are streamed.** A string is reported as
   `startStringValue()`, any number of `stringValueContent(CharSequence)`
@@ -158,10 +163,11 @@ any string value in it.
   keep it, and treat it as provisional until `endStringValue()`, since a
   malformed string is only detected when it is reached.
 - **Keys are single tokens.** `key(String)` takes a complete name, so a key
-  that spans chunks is held in the internal `pending` buffer until its
-  closing quote arrives. Keys are limited to `setMaxNameLength` bytes
-  (default 4096), so keep your receive buffer larger than that. Literals
-  (`true`, `false`, `null`) are held the same way, and are tiny.
+  that spans chunks stays unconsumed in your buffer until its closing quote
+  arrives. Keys are limited to `setMaxNameLength` bytes (default 4096), so
+  keep your receive buffer larger than that; `parse(InputStream)` uses a
+  single buffer of `bufferSize` bytes (default 8KB) the same way. Literals
+  (`true`, `false`, `null`) are handled the same way, and are tiny.
 - **Numbers are read a byte at a time** into a handful of counters, so a
   number can span any number of chunks without being held. A number has no
   closing delimiter, so it is reported when the next byte shows it has
@@ -175,7 +181,8 @@ any string value in it.
   numbers), when it can be one unit in the last place out. Real numbers with
   19 or fewer significant digits are always exactly rounded.
 - Nesting costs a little per open array or object (`setMaxNestingDepth`,
-  default 1000). The key-interning table holds at most 10,000 distinct keys.
+  default 1000). The key-interning table holds at most 10,000 keys, and only
+  keys of up to 64 bytes are interned.
   `setRejectDuplicateKeys(true)` remembers every key of every open object,
   so it is proportional to the document and is off by default.
 

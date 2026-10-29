@@ -17,6 +17,17 @@ public class StreamingTest {
     /**
      * Test parsing a JSON object split across multiple chunks.
      */
+    // The caller's side of the buffer contract: bytes the parser could not use
+    // yet stay in this buffer, and are presented again with the next chunk
+    private final ByteBuffer callerBuffer = ByteBuffer.allocate(256);
+
+    private void receive(JSONParser parser, byte[] chunk) throws JSONException {
+        callerBuffer.put(chunk);
+        callerBuffer.flip();
+        parser.receive(callerBuffer);
+        callerBuffer.compact();
+    }
+
     @Test
     public void testChunkedObject() throws Exception {
         TestHandler handler = new TestHandler();
@@ -31,7 +42,7 @@ public class StreamingTest {
         for (int i = 0; i < json.length(); i += 3) {
             int end = Math.min(i + 3, json.length());
             String chunk = json.substring(i, end);
-            parser.receive(ByteBuffer.wrap(chunk.getBytes()));
+            receive(parser, chunk.getBytes());
         }
         
         parser.close();
@@ -54,8 +65,8 @@ public class StreamingTest {
         parser.setContentHandler(handler);
         
         // Split in the middle of a string value
-        parser.receive(ByteBuffer.wrap("{\"test\":\"hel".getBytes()));
-        parser.receive(ByteBuffer.wrap("lo world\"}".getBytes()));
+        receive(parser, "{\"test\":\"hel".getBytes());
+        receive(parser, "lo world\"}".getBytes());
         parser.close();
         
         assertEquals(1, handler.strings.size());
@@ -73,8 +84,8 @@ public class StreamingTest {
         parser.setContentHandler(handler);
         
         // Split in the middle of a number
-        parser.receive(ByteBuffer.wrap("{\"value\":123".getBytes()));
-        parser.receive(ByteBuffer.wrap("45}".getBytes()));
+        receive(parser, "{\"value\":123".getBytes());
+        receive(parser, "45}".getBytes());
         parser.close();
         
         assertEquals(1, handler.numbers.size());
@@ -92,8 +103,8 @@ public class StreamingTest {
         parser.setContentHandler(handler);
         
         // Split in the middle of \n escape
-        parser.receive(ByteBuffer.wrap("[\"line1\\".getBytes()));
-        parser.receive(ByteBuffer.wrap("nline2\"]".getBytes()));
+        receive(parser, "[\"line1\\".getBytes());
+        receive(parser, "nline2\"]".getBytes());
         parser.close();
         
         assertEquals(1, handler.strings.size());
@@ -111,8 +122,8 @@ public class StreamingTest {
         parser.setContentHandler(handler);
         
         // Split in the middle of \u0041 (A)
-        parser.receive(ByteBuffer.wrap("[\"test\\u00".getBytes()));
-        parser.receive(ByteBuffer.wrap("41end\"]".getBytes()));
+        receive(parser, "[\"test\\u00".getBytes());
+        receive(parser, "41end\"]".getBytes());
         parser.close();
         
         assertEquals(1, handler.strings.size());
@@ -129,7 +140,7 @@ public class StreamingTest {
         parser.setContentHandler(new TestHandler());
         
         try {
-            parser.receive(ByteBuffer.wrap("[\"unclosed".getBytes()));
+            receive(parser, "[\"unclosed".getBytes());
             parser.close();
             fail("Should have thrown exception for unclosed string");
         } catch (JSONException e) {
@@ -151,7 +162,7 @@ public class StreamingTest {
         
         // Send one byte at a time
         for (int i = 0; i < json.length(); i++) {
-            parser.receive(ByteBuffer.wrap(new byte[]{(byte) json.charAt(i)}));
+            receive(parser, new byte[]{(byte) json.charAt(i)});
         }
         
         parser.close();

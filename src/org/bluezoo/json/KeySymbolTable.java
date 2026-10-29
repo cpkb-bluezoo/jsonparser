@@ -35,7 +35,8 @@ import java.util.Arrays;
  * hashing costs nothing extra), calls {@link #lookup} first, and only
  * decodes and calls {@link #put} on a miss.
  * <p>
- * Bounded by {@link #MAX_ENTRIES}: once reached, {@link #put} silently
+ * Only keys of up to {@link #MAX_KEY_BYTES} bytes are interned by
+ * {@link JSONTokenizer}. Bounded by {@link #MAX_ENTRIES}: once reached, {@link #put} silently
  * becomes a no-op. This is purely a performance cliff, not a correctness
  * issue - it guards a long-lived instance (this table is owned by
  * {@link JSONParser} and stays warm across {@link JSONParser#reset()} calls,
@@ -51,6 +52,14 @@ final class KeySymbolTable {
     private static final int FNV_PRIME = 0x01000193;
 
     private static final int MAX_ENTRIES = 10_000;
+
+    /**
+     * Longest key (in raw bytes) that is interned. Real field names are
+     * short; capping the length keeps the memory this long-lived table can
+     * hold to about a megabyte, however long the keys in a document are
+     * allowed to be.
+     */
+    static final int MAX_KEY_BYTES = 64;
     private static final int DEFAULT_CAPACITY = 64;
 
     private int[] hashes;

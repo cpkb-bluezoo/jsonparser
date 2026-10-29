@@ -19,10 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     largest single string or key. This is bounded by default by
     `setMaxStringLength` (20,000,000) and `setMaxNameLength` (4096), and
     unbounded if those limits are disabled.
-  - Since 1.3, `JSONParser` copies any incomplete trailing token into an
-    internal `pending` buffer, so `receive()` fully consumes the buffer it
-    is given. The README and `receive()` Javadoc previously described the
-    older caller-owned-buffer contract.
+  - Since 1.3, `JSONParser` copied any incomplete trailing token into an
+    internal `pending` buffer, so `receive()` fully consumed the buffer it
+    was given, contradicting the README and `receive()` Javadoc, which
+    described the older caller-owned-buffer contract. That buffer is removed
+    again; see "Changed".
   - A string spanning many chunks was rescanned from its opening quote on
     every chunk, so very large strings delivered in small chunks cost
     superlinear time.
@@ -84,6 +85,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped digits, which is roughly 1 in a few hundred to a few thousand such
   numbers, and then it can be one ulp out. Real numbers with 19 or fewer
   significant digits are exactly rounded, as before.
+- **Breaking:** `JSONParser.receive()` no longer holds any of the document's
+  bytes. Version 1.3 copied an incomplete trailing token into an internal
+  `pending` buffer and consumed the whole buffer it was given; that is
+  removed, and the buffer contract documented in 1.2 is restored. What
+  `receive()` cannot use yet (an incomplete key or literal, the start of an
+  escape sequence or multi-byte character, a partial byte order mark) is
+  left unconsumed in the caller's buffer, with `position()` stopped at it.
+  The caller `compact()`s the buffer, reads more in after those bytes, and
+  presents them again. The parser has two buffers: the caller's, and a
+  `CharBuffer` of the same capacity for string content.
+  - A caller that passes a fresh buffer holding only new bytes (which 1.3
+    tolerated) or that `clear()`s instead of `compact()`ing now gets a
+    `JSONException`: the parser keeps a count and a hash of the unconsumed
+    bytes and checks they are presented again, rather than mis-parse
+    silently.
+  - The buffer must be larger than the longest key
+    (`setMaxNameLength`, default 4096, plus two quotes). A buffer that is
+    full of one unfinished token makes `receive()` throw a "receive buffer
+    too small" exception instead of waiting for data that cannot fit.
+  - `close()` rejects bytes still left unconsumed as an incomplete token.
+  - `parse(InputStream)` reads into a single fixed buffer of `bufferSize`
+    bytes (default 8KB) and never grows it; a key longer than the buffer is
+    reported as a buffer-too-small error.
+  - `setMaxDocumentLength` counts each byte once, however many times it is
+    presented.
+- Only keys of up to 64 bytes are interned in the key table, which lives as
+  long as the parser, so it holds about a megabyte at most (10,000 keys)
+  however long keys are allowed to be.
 - **Breaking:** the `JSONLocator` position reported with `endStringValue()`
   is after the closing quote; `startStringValue()` reports the position
   before the opening quote, where `stringValue(String)` used to.

@@ -305,11 +305,11 @@ public class StringStreamingTest {
 
         assertTrue("all of the content was delivered", total[0] >= (long) chunks * (chunk - 2));
 
-        assertTrue("pending carry-over buffer stayed small", capacityOf(parser, "pending", true) <= 64 * 1024);
+        assertEquals("nothing was left unconsumed", 0, buffer.remaining());
         assertTrue("character buffer stayed small", capacityOf(parser, "chars", false) <= 64 * 1024);
     }
 
-    /** Capacity of a private ByteBuffer field of the parser, or of a CharBuffer field of its tokenizer. */
+    /** Capacity of a private CharBuffer field of the parser's tokenizer (or of a ByteBuffer field of the parser). */
     private static int capacityOf(JSONParser parser, String field, boolean onParser) throws Exception {
         Object holder = parser;
         if (!onParser) {

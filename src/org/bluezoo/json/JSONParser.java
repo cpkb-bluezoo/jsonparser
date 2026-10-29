@@ -27,22 +27,30 @@ import java.nio.ByteBuffer;
  * <p>This parser follows the standard non-blocking streaming contract:
  * <ul>
  *   <li>The caller provides a buffer in read mode (ready for get operations)</li>
- *   <li>The parser consumes as many complete tokens as possible</li>
- *   <li>Any trailing incomplete token (a key or literal, or the start of
- *       an escape sequence or multi-byte character in a string) is copied into
- *       an internal buffer, so after {@link #receive(ByteBuffer)} returns the
- *       whole input buffer has been consumed ({@link ByteBuffer#compact()} is
- *       harmless but not required)</li>
- *   <li>The next {@code receive()} call prepends the carried-over bytes and
- *       continues from where parsing left off</li>
+ *   <li>The parser consumes as many complete tokens as possible. It holds
+ *       none of the document's bytes itself</li>
+ *   <li>Anything it cannot use yet (a key or literal that is not finished, the
+ *       start of an escape sequence or multi-byte character in a string, a
+ *       partial byte order mark) is left unconsumed: after
+ *       {@link #receive(ByteBuffer)} returns, the buffer's position is where
+ *       those bytes begin</li>
+ *   <li>The caller must {@link ByteBuffer#compact() compact()} the buffer (not
+ *       {@code clear()} it), read more data in after the unconsumed bytes,
+ *       and present them again at the head of the next {@code receive()}.
+ *       The parser checks this and throws a {@link JSONException} if the
+ *       bytes are missing or changed</li>
+ *   <li>The buffer must be larger than the longest key ({@link #setMaxNameLength},
+ *       plus its two quotes). If it is full of one unfinished token,
+ *       {@code receive()} throws rather than waiting for data that cannot fit</li>
  * </ul>
  * <p><strong>Memory:</strong> memory use does not grow with document size or
- * string length. String values are streamed to the handler
+ * string length. The parser has two buffers: the one passed to
+ * {@code receive}, and a character buffer of the same capacity into which
+ * string content is decoded and handed to the handler as it arrives
  * ({@link JSONContentHandler#startStringValue()},
  * {@link JSONContentHandler#stringValueContent(CharSequence)},
- * {@link JSONContentHandler#endStringValue()}) through a character buffer the
- * size of the byte buffer passed to {@code receive}. Keys are delivered whole,
- * so a key is held until complete (limited by {@link #setMaxNameLength}).
+ * {@link JSONContentHandler#endStringValue()}). Keys are delivered whole, so
+ * a key stays in the caller's buffer until complete.
  *
  * <h3>Usage (Streaming)</h3>
  * <pre>{@code
@@ -83,18 +91,15 @@ public class JSONParser {
     private boolean checkedBom;
     private boolean closed;
 
-    // Carries forward whatever bytes were left unconsumed (an incomplete
-    // trailing token) at the end of the most recent receive() call. This is
-    // needed because receive() may be called with an entirely fresh,
-    // non-overlapping ByteBuffer each time (not just the same buffer
-    // compacted and refilled) - the parser, not the caller, is responsible
-    // for remembering a partial token across calls. It also lets close()
-    // (which takes no buffer argument) hand any final leftover bytes to the
-    // tokenizer one more time with its closed flag set, to finalize a bare
-    // trailing token such as "42" with no following delimiter.
-    // In write mode between calls: position is the number of leftover
-    // bytes already stored, limit is capacity.
-    private ByteBuffer pending;
+    // The parser holds none of the document's bytes. What receive() cannot
+    // use yet (an incomplete key or literal, the start of an escape sequence
+    // or multi-byte character, a partial byte order mark) is left unconsumed
+    // in the caller's buffer, which the caller compacts and presents again
+    // with more data. These record how many bytes were left, and a hash of
+    // them, so a caller that threw them away (clear() instead of compact())
+    // is told rather than silently mis-parsed.
+    private int unconsumed;
+    private long unconsumedHash;
 
     // Hash-first key interning table (see KeySymbolTable) - created once and
     // reused across every JSONTokenizer this parser creates, so it stays
@@ -123,7 +128,9 @@ public class JSONParser {
     /**
      * Creates a new JSON parser with the specified buffer size.
      *
-     * @param bufferSize the initial size of the character buffer in bytes
+     * @param bufferSize the size in bytes of the single buffer that
+     *        {@link #parse(InputStream)} reads into; it must be larger than
+     *        the longest key (see {@link #setMaxNameLength}) plus its quotes
      */
     public JSONParser(int bufferSize) {
         if (bufferSize <= 0) {
@@ -288,12 +295,7 @@ public class JSONParser {
                 buffer.compact();
             }
             
-            // Process any remaining data in the buffer
-            buffer.flip();
-            if (buffer.hasRemaining()) {
-                receive(buffer);
-            }
-            
+            // Anything still unconsumed is an incomplete token: close() rejects it
             close();
         } catch (IOException e) {
             throw new JSONException("I/O error reading stream", e);
@@ -304,43 +306,48 @@ public class JSONParser {
      * Receive bytes into the parser.
      * <p>
      * Bytes are processed immediately. Parsing events are fired to the
-     * content handler as tokens are recognized. An incomplete trailing token
-     * is copied into an internal buffer and prepended to the next chunk.
+     * content handler as tokens are recognized.
      * <p>
      * <strong>Buffer Contract:</strong> The byte buffer must be in read mode
-     * (after {@code flip()}). After this method returns the buffer has been
-     * fully consumed (position equals limit); {@code buffer.compact()} is
-     * harmless but not required before reading more data into it.
+     * (after {@code flip()}). After this method returns, any bytes the parser
+     * could not use yet remain unconsumed, starting at the buffer's position.
+     * The caller must {@code compact()} the buffer, read more data in after
+     * them, and call this method again with them still at the head of the
+     * buffer.
      *
      * @param data the byte buffer to process (must be in read mode)
-     * @throws JSONException if there is a parsing error or stream is closed
+     * @throws JSONException if there is a parsing error, the stream is
+     *         closed, bytes left unconsumed by the previous call are not
+     *         presented again, or the buffer is full of a single token that
+     *         is not yet complete
      */
     public void receive(ByteBuffer data) throws JSONException {
         if (closed) {
             throw new JSONException("Cannot receive data after close()");
         }
 
-        if (!data.hasRemaining()) {
+        int available = data.remaining();
+        verifyUnconsumedPresentedAgain(data);
+
+        if (available == 0) {
             return;
         }
 
         if (limits.maxDocumentLength > 0) {
-            documentLength += data.remaining();
+            // The unconsumed bytes presented again were counted when they first arrived
+            documentLength += available - unconsumed;
             if (documentLength > limits.maxDocumentLength) {
                 throw new JSONException("Maximum document length exceeded: " + limits.maxDocumentLength);
             }
         }
 
-        // If a previous call left an incomplete token's worth of bytes
-        // uncarried, prepend them so the tokenizer sees the token from its
-        // true start. Common case (nothing pending) is zero-copy.
-        ByteBuffer toProcess = mergeWithPending(data);
+        int startPosition = data.position();
 
         // Check for BOM on first chunk
         if (!checkedBom) {
-            if (!checkBom(toProcess)) {
-                // Need more data to determine BOM - carry forward and wait
-                savePending(toProcess);
+            if (!checkBom(data)) {
+                // Need more data to determine BOM: leave it all for the caller
+                noteUnconsumed(data, startPosition);
                 return;
             }
             checkedBom = true;
@@ -355,65 +362,61 @@ public class JSONParser {
         // structural characters, whitespace, numbers, or literals; see
         // JSONTokenizer for the UTF-8 self-synchronization property this
         // relies on.
-        tokenizer.receive(toProcess);
+        tokenizer.receive(data);
 
-        savePending(toProcess);
+        noteUnconsumed(data, startPosition);
     }
 
     /**
-     * If {@link #pending} holds carried-over bytes from a previous call,
-     * appends {@code data} to it and returns it (in read mode); otherwise
-     * returns {@code data} unchanged (the common, zero-copy case).
+     * Checks that the bytes the previous call left unconsumed are at the
+     * head of {@code data}, as the buffer contract requires.
      */
-    private ByteBuffer mergeWithPending(ByteBuffer data) {
-        if (pending == null || pending.position() == 0) {
-            return data;
-        }
-        int needed = pending.position() + data.remaining();
-        if (pending.capacity() < needed) {
-            ByteBuffer bigger = ByteBuffer.allocate(Math.max(needed + 256, pending.capacity() * 2));
-            pending.flip();
-            bigger.put(pending);
-            pending = bigger;
-        }
-        pending.put(data);
-        pending.flip();
-        return pending;
-    }
-
-    /**
-     * Carries forward whatever remains unconsumed in {@code toProcess} (an
-     * incomplete trailing token) into {@link #pending}, ready to be
-     * prepended by the next call to {@link #mergeWithPending}.
-     */
-    private void savePending(ByteBuffer toProcess) {
-        if (!toProcess.hasRemaining()) {
-            if (toProcess == pending) {
-                pending.clear();
-            }
+    private void verifyUnconsumedPresentedAgain(ByteBuffer data) throws JSONException {
+        if (unconsumed == 0) {
             return;
         }
-        if (toProcess == pending) {
-            // Already our own buffer - shift the unread remainder to the
-            // front and return to write mode for the next append.
-            pending.compact();
-        } else {
-            int remaining = toProcess.remaining();
-            if (pending == null || pending.capacity() < remaining) {
-                pending = ByteBuffer.allocate(Math.max(remaining + 256, bufferSize));
-            } else {
-                pending.clear();
-            }
-            pending.put(toProcess);
+        if (data.remaining() < unconsumed || hashOf(data, unconsumed) != unconsumedHash) {
+            throw new JSONException("The " + unconsumed + " unconsumed bytes left by the previous receive() "
+                    + "were not presented again: compact() the buffer after receive(), do not clear() it");
         }
+    }
+
+    /**
+     * Records what receive() left unconsumed in the caller's buffer. If it
+     * left everything and the buffer has no room for more, the caller can
+     * never supply the rest, so say so rather than loop forever.
+     */
+    private void noteUnconsumed(ByteBuffer data, int startPosition) throws JSONException {
+        unconsumed = data.remaining();
+        if (unconsumed == 0) {
+            unconsumedHash = 0;
+            return;
+        }
+        unconsumedHash = hashOf(data, unconsumed);
+        if (data.position() == startPosition && data.limit() == data.capacity()) {
+            throw new JSONException("Receive buffer too small: the next token needs more than the "
+                    + unconsumed + " bytes it holds. A key must fit the buffer (see setMaxNameLength).");
+        }
+    }
+
+    /** FNV-1a hash of the first {@code length} bytes from {@code data}'s position. */
+    private static long hashOf(ByteBuffer data, int length) {
+        long hash = 0xcbf29ce484222325L;
+        int p = data.position();
+        for (int i = 0; i < length; i++) {
+            hash = (hash ^ (data.get(p + i) & 0xFF)) * 0x100000001b3L;
+        }
+        return hash;
     }
 
     /**
      * Close the parser, signaling end of input.
      * <p>
-     * This validates that the JSON document is complete. The closed state
-     * is signaled to the tokenizer, which will treat end-of-buffer as 
-     * end-of-token (e.g., for numbers without delimiters like "42").
+     * This validates that the JSON document is complete. A number that ends
+     * the document (such as the whole document {@code 42}) has no delimiter
+     * to show where it ends, so it is reported by this call. Bytes still
+     * left unconsumed by the last {@link #receive} are an incomplete token and
+     * are rejected.
      * <p>
      * After closing, further calls to receive() will throw an exception.
      * Use {@link #reset()} to prepare the parser for a new document.
@@ -432,18 +435,10 @@ public class JSONParser {
             throw new JSONException("No data");
         }
         
-        tokenizer.setClosed(true);
-
-        // Re-present any leftover incomplete-token bytes now that the
-        // tokenizer knows no more data is coming (e.g. finalizes a bare
-        // trailing number like "42" with no following delimiter).
-        if (pending != null && pending.position() > 0) {
-            pending.flip();
-            tokenizer.receive(pending);
-
-            if (pending.hasRemaining()) {
-                throw new JSONException("Unclosed string or incomplete token at end of input");
-            }
+        // Bytes left unconsumed can only have been the start of a token that
+        // now can never be completed
+        if (unconsumed > 0) {
+            throw new JSONException("Unclosed string or incomplete token at end of input");
         }
 
         // Completes a number that ends the document and rejects an unfinished
@@ -475,9 +470,8 @@ public class JSONParser {
         checkedBom = false;
         closed = false;
         documentLength = 0;
-        if (pending != null) {
-            pending.clear();
-        }
+        unconsumed = 0;
+        unconsumedHash = 0;
 
         // Clear tokenizer
         tokenizer = null;

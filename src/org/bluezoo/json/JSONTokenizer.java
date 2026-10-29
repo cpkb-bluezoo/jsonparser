@@ -94,7 +94,6 @@ class JSONTokenizer implements JSONLocator {
     private int lineNumber = 1;
     private int columnNumber = 0;
     private boolean afterCR = false; // Last byte was a CR, so a following LF is the same line break
-    private boolean closed = false;
 
     // Track context for key vs value
     private Deque<Context> contextStack = new ArrayDeque<>();
@@ -184,17 +183,6 @@ class JSONTokenizer implements JSONLocator {
     @Override
     public int getColumnNumber() {
         return columnNumber;
-    }
-
-    /**
-     * Signal that the input stream is closed.
-     */
-    void setClosed(boolean closed) {
-        this.closed = closed;
-    }
-
-    boolean isClosed() {
-        return closed;
     }
 
     /**
@@ -570,7 +558,7 @@ class JSONTokenizer implements JSONLocator {
                 String value;
                 int endPos = bytePos;
                 if (builder == null) {
-                    if (tryIntern) {
+                    if (tryIntern && endPos - startPos <= KeySymbolTable.MAX_KEY_BYTES) {
                         int keyOff = off + startPos;
                         int keyLen = endPos - startPos;
                         value = keySymbolTable.lookup(arr, keyOff, keyLen, keyHash);
@@ -648,11 +636,7 @@ class JSONTokenizer implements JSONLocator {
             }
         }
 
-        if (!closed) {
-            return false; // Need more data
-        }
-
-        throw new JSONException("Unclosed string");
+        return false; // Need more data
     }
 
     /**
@@ -751,11 +735,7 @@ class JSONTokenizer implements JSONLocator {
         }
 
         // Ran out of buffer
-        if (!closed) {
-            return false; // Need more data
-        }
-
-        throw new JSONException("Unclosed string");
+        return false; // Need more data
     }
 
     /**
@@ -992,10 +972,7 @@ class JSONTokenizer implements JSONLocator {
      */
     private Character processEscapeSequence(ByteBuffer data) throws JSONException {
         if (!data.hasRemaining()) {
-            if (!closed) {
-                return null; // Need more data
-            }
-            throw new JSONException("Unexpected EOF in escape sequence");
+            return null; // Need more data
         }
 
         byte b = data.get();
@@ -1033,10 +1010,7 @@ class JSONTokenizer implements JSONLocator {
 
         for (int i = 0; i < 4; i++) {
             if (!data.hasRemaining()) {
-                if (!closed) {
-                    return null; // Need more data
-                }
-                throw new JSONException("Incomplete Unicode escape");
+                return null; // Need more data
             }
 
             byte b = data.get();
@@ -1151,10 +1125,7 @@ class JSONTokenizer implements JSONLocator {
         }
 
         if (avail < len) {
-            if (!closed) {
-                return false; // Need more data
-            }
-            throw new JSONException("Incomplete literal");
+            return false; // Need more data
         }
 
         data.position(pos + len);
@@ -1175,10 +1146,7 @@ class JSONTokenizer implements JSONLocator {
         // First character already consumed and counted
         for (int i = 0; i < remaining.length(); i++) {
             if (!data.hasRemaining()) {
-                if (!closed) {
-                    return false; // Need more data
-                }
-                throw new JSONException("Incomplete literal");
+                return false; // Need more data
             }
 
             byte b = data.get();
