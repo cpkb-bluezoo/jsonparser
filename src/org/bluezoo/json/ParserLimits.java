@@ -27,7 +27,7 @@ package org.bluezoo.json;
  * keys, huge documents, or huge flat collections). Defaults match Jackson's
  * {@code StreamReadConstraints} - the de facto industry reference for this
  * exact problem, added there specifically in response to real-world CVEs
- * about this class of issue.
+ * about this class of issue. The one exception is {@link #maxNameLength}.
  * <p>
  * A limit value {@code <= 0} disables that check entirely.
  * <p>
@@ -48,8 +48,13 @@ final class ParserLimits {
     /** Maximum number of characters in a single string value. Jackson default: 20,000,000. */
     int maxStringLength = 20_000_000;
 
-    /** Maximum number of characters in a single object key. Jackson default: 50,000. */
-    int maxNameLength = 50_000;
+    /**
+     * Maximum size in raw bytes (before unescaping, excluding the quotes) of
+     * a single object key. Deliberately lower than Jackson's 50,000: a key
+     * must fit in the caller's receive buffer, so this is sized to be safe
+     * for any buffer of 8KB or more.
+     */
+    int maxNameLength = 4096;
 
     /** Maximum total bytes in one document. Unlimited (0) by default - matches Jackson. */
     long maxDocumentLength = 0;

@@ -148,7 +148,7 @@ Memory use is independent of document size, but it is **not constant**:
   chunk, a very large string delivered in small chunks also costs
   time that grows faster than linearly with the string's length.
 - By default this is capped: `setMaxStringLength` (20,000,000) and
-  `setMaxNameLength` (50,000). `disableAllLimits()`, or setting those limits
+  `setMaxNameLength` (4096). `disableAllLimits()`, or setting those limits
   to 0, removes the cap, and a single huge string can then exhaust memory.
 
 Truly constant-memory handling of large strings requires the handler to

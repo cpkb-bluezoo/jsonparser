@@ -197,8 +197,9 @@ public class JSONParser {
     }
 
     /**
-     * Sets the maximum number of characters in a single object key. Default
-     * 50,000 (matches Jackson). A value {@code <= 0} disables this check.
+     * Sets the maximum size in raw bytes (before unescaping, excluding the
+     * quotes) of a single object key. Default 4096 (Jackson uses 50,000). A
+     * value {@code <= 0} disables this check.
      *
      * @param maxNameLength the maximum key length, or {@code <= 0} to disable
      */

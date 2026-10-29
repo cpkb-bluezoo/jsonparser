@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     complete value, so the parser must hold every byte of a string or key
     until its closing quote arrives. Peak memory is proportional to the
     largest single string or key. This is bounded by default by
-    `setMaxStringLength` (20,000,000) and `setMaxNameLength` (50,000), and
+    `setMaxStringLength` (20,000,000) and `setMaxNameLength` (4096), and
     unbounded if those limits are disabled.
   - Since 1.3, `JSONParser` copies any incomplete trailing token into an
     internal `pending` buffer, so `receive()` fully consumes the buffer it
@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     superlinear time.
 - README, package Javadoc and `JSONParser` Javadoc now state the real
   behaviour (see "Memory behaviour" in the README).
+
+### Changed
+
+- **Breaking:** the default `setMaxNameLength` is now 4096 (was 50,000), and
+  the limit is documented as raw bytes rather than characters (the code has
+  always compared raw byte offsets). Documents with object keys longer than
+  4096 bytes that previously parsed are now rejected unless the limit is
+  raised. This deliberately departs from Jackson's 50,000 default: a key
+  must fit in the caller's receive buffer, and 4096 is safe for any buffer
+  of 8KB or more.
 
 ### Planned
 
