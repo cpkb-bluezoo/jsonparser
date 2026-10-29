@@ -1173,35 +1173,43 @@ class JSONTokenizer implements JSONLocator {
             return Long.valueOf(value);
         }
 
-        // Real number (has a fractional part and/or an exponent)
-        if (intOverflow || fracOverflow || expOverflow) {
-            String numStr = decodeSpan(data, startPos, endPos, false);
-            try {
-                return Double.valueOf(numStr);
-            } catch (NumberFormatException e) {
-                throw new JSONException("Invalid number: " + numStr, e);
+        // Real number (has a fractional part and/or an exponent). The value
+        // is exactly digits * 10^e10, where digits is the integer and
+        // fractional digits read as one integer. When that fits a long and
+        // a single IEEE multiply or divide is provably exact (Clinger's
+        // fast path), the result is correctly rounded; anything else goes
+        // through Double.valueOf on the number text so it is correctly
+        // rounded too.
+        if (!intOverflow && !fracOverflow && !expOverflow && ival <= (Long.MAX_VALUE - dval) / mul) {
+            long digits = ival * mul + dval;
+            int fractionDigits = 0;
+            for (long m = mul; m > 1; m /= 10) {
+                fractionDigits++;
+            }
+            int e10 = (expNegative ? -exponent : exponent) - fractionDigits;
+            if (digits == 0) {
+                return Double.valueOf(negative ? -0.0 : 0.0);
+            }
+            if (digits <= MAX_EXACT_DIGITS && e10 >= -MAX_EXACT_POW10 && e10 <= MAX_EXACT_POW10) {
+                double value = e10 < 0 ? digits / POW10[-e10] : digits * POW10[e10];
+                return Double.valueOf(negative ? -value : value);
             }
         }
 
-        double mantissa = hasFraction ? (ival + (dval / (double) mul)) : (double) ival;
-        double value = mantissa;
-        if (hasExponent) {
-            double signedExponent = expNegative ? -exponent : exponent;
-            if (signedExponent < -290 || signedExponent > 290) {
-                // Splitting avoids Math.pow(10, signedExponent) underflowing/
-                // overflowing to exactly 0/Infinity on its own for exponents
-                // near the extremes of the double range (e.g. 4.9e-324, the
-                // smallest subnormal) when the mantissa should still bring
-                // the final product back into representable range.
-                double half = signedExponent / 2;
-                value = mantissa * Math.pow(10, half) * Math.pow(10, signedExponent - half);
-            } else {
-                value = mantissa * Math.pow(10, signedExponent);
-            }
+        String numStr = decodeSpan(data, startPos, endPos, false);
+        try {
+            return Double.valueOf(numStr);
+        } catch (NumberFormatException e) {
+            throw new JSONException("Invalid number: " + numStr, e);
         }
-        if (negative) {
-            value = -value;
-        }
-        return Double.valueOf(value);
     }
+
+    // Largest integer, and largest power of ten, that a double represents
+    // exactly: with both operands exact, one multiply or divide rounds once.
+    private static final long MAX_EXACT_DIGITS = 1L << 53;
+    private static final int MAX_EXACT_POW10 = 22;
+    private static final double[] POW10 = {
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+        1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+    };
 }

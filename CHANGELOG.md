@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     superlinear time.
 - README, package Javadoc and `JSONParser` Javadoc now state the real
   behaviour (see "Memory behaviour" in the README).
+- Real numbers are now correctly rounded, matching `Double.parseDouble`
+  exactly. They were composed as `(int + frac / 10^k) * Math.pow(10, exp)`,
+  which rounds several times and was off by one ulp for a large share of
+  inputs (about 36% of random 17-digit doubles, about 20% of short decimals
+  with an exponent). It also parsed `1.7976931348623157e308`
+  (`Double.MAX_VALUE`) as `Infinity`. Values whose digits and exponent allow
+  a single exact IEEE operation are converted directly; everything else is
+  converted from the number text by the JDK.
 - `JSONLocator` positions depend on how the input is chunked no longer: the
   first space or tab of every whitespace run was not counted in the column,
   so the reported column varied with the `receive()` chunk boundaries (and
