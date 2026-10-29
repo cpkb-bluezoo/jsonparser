@@ -33,9 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which rounds several times and was off by one ulp for a large share of
   inputs (about 36% of random 17-digit doubles, about 20% of short decimals
   with an exponent). It also parsed `1.7976931348623157e308`
-  (`Double.MAX_VALUE`) as `Infinity`. Values whose digits and exponent allow
-  a single exact IEEE operation are converted directly; everything else is
-  converted from the number text by the JDK.
+  (`Double.MAX_VALUE`) as `Infinity`. Numbers whose significant digits fit
+  in a `long` are converted without allocating, using Clinger's exact fast
+  path where one IEEE operation suffices and the Eisel-Lemire algorithm
+  otherwise (new internal class `DecimalToDouble`; its table of powers of
+  five is generated on first use). Numbers with more significant digits than
+  that are converted from the number text by the JDK.
 - `JSONLocator` positions depend on how the input is chunked no longer: the
   first space or tab of every whitespace run was not counted in the column,
   so the reported column varied with the `receive()` chunk boundaries (and

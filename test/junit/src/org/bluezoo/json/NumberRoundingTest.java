@@ -120,6 +120,67 @@ public class NumberRoundingTest {
         assertAllExact(numbers);
     }
 
+    private static final long[] POW10 = new long[19];
+
+    static {
+        POW10[0] = 1;
+        for (int i = 1; i < POW10.length; i++) {
+            POW10[i] = POW10[i - 1] * 10;
+        }
+    }
+
+    @Test
+    public void digitStringsAcrossTheWholeExponentRange() throws Exception {
+        // 1 to 19 significant digits, exponents running from far below the
+        // smallest subnormal to far above the largest double
+        Random rnd = new Random(4);
+        List<String> numbers = new ArrayList<>();
+        for (int i = 0; i < 200000; i++) {
+            int len = 1 + rnd.nextInt(19);
+            long lo = POW10[len - 1];
+            long hi = len == 19 ? Long.MAX_VALUE : POW10[len] - 1;
+            long m = lo + Long.remainderUnsigned(rnd.nextLong(), hi - lo + 1);
+            numbers.add(m + "e" + (rnd.nextInt(700) - 360));
+        }
+        assertAllExact(numbers);
+    }
+
+    @Test
+    public void subnormalsAndTheEdgesOfTheNormalRange() throws Exception {
+        Random rnd = new Random(5);
+        List<String> numbers = new ArrayList<>();
+        for (int i = 0; i < 50000; i++) {
+            long fraction = rnd.nextLong() & 0x000FFFFFFFFFFFFFL;
+            if (fraction != 0) {
+                numbers.add(Double.toString(Double.longBitsToDouble(fraction)));
+            }
+            // just below the largest finite double, and either side of the smallest normal
+            numbers.add(Double.toString(Double.longBitsToDouble(0x7FEFFFFFFFFFFFFFL - (rnd.nextLong() & 0xFFFFFFL))));
+            numbers.add(Double.toString(Double.longBitsToDouble(0x0010000000000000L + rnd.nextInt(2000) - 1000)));
+        }
+        assertAllExact(numbers);
+    }
+
+    @Test
+    public void exactHalfwaysRoundToEvenAndNeighboursDoNot() throws Exception {
+        // Integers above 2^53 that sit exactly halfway between two doubles
+        // (an odd multiple of half the spacing), and one either side of them
+        Random rnd = new Random(6);
+        List<String> numbers = new ArrayList<>();
+        for (int k = 1; k <= 6; k++) {
+            for (int i = 0; i < 5000; i++) {
+                long m = (1L << 52) + (rnd.nextLong() & ((1L << 52) - 1));
+                long halfway = (m << k) + (1L << (k - 1));
+                for (long n = halfway - 1; n <= halfway + 1; n++) {
+                    numbers.add(n + ".0");
+                    numbers.add(n + "e0");
+                    numbers.add((n * 10) + "e-1");
+                }
+            }
+        }
+        assertAllExact(numbers);
+    }
+
     @Test
     public void shortDecimalsWithExponent() throws Exception {
         Random rnd = new Random(3);

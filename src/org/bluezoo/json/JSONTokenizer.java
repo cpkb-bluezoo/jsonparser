@@ -1175,11 +1175,9 @@ class JSONTokenizer implements JSONLocator {
 
         // Real number (has a fractional part and/or an exponent). The value
         // is exactly digits * 10^e10, where digits is the integer and
-        // fractional digits read as one integer. When that fits a long and
-        // a single IEEE multiply or divide is provably exact (Clinger's
-        // fast path), the result is correctly rounded; anything else goes
-        // through Double.valueOf on the number text so it is correctly
-        // rounded too.
+        // fractional digits read as one integer. When that fits a long it is
+        // converted without allocating (see DecimalToDouble); a number with
+        // more significant digits than that is converted from its text.
         if (!intOverflow && !fracOverflow && !expOverflow && ival <= (Long.MAX_VALUE - dval) / mul) {
             long digits = ival * mul + dval;
             int fractionDigits = 0;
@@ -1187,13 +1185,7 @@ class JSONTokenizer implements JSONLocator {
                 fractionDigits++;
             }
             int e10 = (expNegative ? -exponent : exponent) - fractionDigits;
-            if (digits == 0) {
-                return Double.valueOf(negative ? -0.0 : 0.0);
-            }
-            if (digits <= MAX_EXACT_DIGITS && e10 >= -MAX_EXACT_POW10 && e10 <= MAX_EXACT_POW10) {
-                double value = e10 < 0 ? digits / POW10[-e10] : digits * POW10[e10];
-                return Double.valueOf(negative ? -value : value);
-            }
+            return Double.valueOf(DecimalToDouble.convert(negative, digits, e10));
         }
 
         String numStr = decodeSpan(data, startPos, endPos, false);
@@ -1203,13 +1195,4 @@ class JSONTokenizer implements JSONLocator {
             throw new JSONException("Invalid number: " + numStr, e);
         }
     }
-
-    // Largest integer, and largest power of ten, that a double represents
-    // exactly: with both operands exact, one multiply or divide rounds once.
-    private static final long MAX_EXACT_DIGITS = 1L << 53;
-    private static final int MAX_EXACT_POW10 = 22;
-    private static final double[] POW10 = {
-        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
-        1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
-    };
 }
