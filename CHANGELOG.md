@@ -63,6 +63,15 @@ memory independent of the size of the document and of any string in it.
   `-Xlint:options` category, which newer JDKs raise to say that targeting
   Java 8, the supported baseline, is obsolete.
 - `JSONWriter` no longer relies on a switch fall-through when indenting.
+- `JSONWriter` wrote a Java string's unpaired surrogate (half of an emoji
+  that lost its other half, for example) as the three bytes `ED A0 BD`,
+  which are not valid UTF-8, so this library's own parser rejected what its
+  own writer produced. It is now written as a \uXXXX escape, which is valid JSON
+  and reads back as the same character. This applies to values, keys, and
+  streamed content, including when a pair is split across calls; a proper
+  pair is still written as one UTF-8 character. (RFC 8259 notes that other
+  software may handle a string like this unpredictably, so it is best
+  avoided at the source.)
 
 ### Added
 

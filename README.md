@@ -309,7 +309,10 @@ public class MakeJohnSmith {
 }
 ```
 
-`writeString(String)` is for when you already have the whole string. To
+`writeString(String)` is for when you already have the whole string. (A
+surrogate that is not part of a valid pair has no UTF-8 encoding, so the
+writer writes it as a \uXXXX escape, which the parser reads back as the same
+character.) To
 write a string without holding it, mirror the parser's events:
 `writeStartString()`, any number of `writeStringContent(CharSequence)` calls
 (a surrogate pair may be split across two), then `writeEndString()`. The

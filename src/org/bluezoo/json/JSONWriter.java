@@ -233,7 +233,12 @@ public class JSONWriter {
     }
 
     /**
-     * Writes a string value.
+     * Writes a string value. Characters JSON requires to be escaped are
+     * escaped, and the rest are written as UTF-8. A surrogate that is not
+     * part of a valid pair has no UTF-8 encoding, so it is written as a
+     * <code>&#92;uXXXX</code> escape instead; this library's parser reads that back as
+     * the same character (though RFC 8259 warns that other software may not
+     * handle such a string predictably).
      *
      * @param value the string value
      * @throws IOException if there is an error writing data
@@ -277,7 +282,9 @@ public class JSONWriter {
      * does not grow with the length of the string. The content is not
      * retained, so the caller may reuse it as soon as this method returns.
      * <p>
-     * A surrogate pair may be split across two calls.
+     * A surrogate pair may be split across two calls. As with
+     * {@link #writeString}, an unpaired surrogate is written as a
+     * <code>&#92;uXXXX</code> escape.
      *
      * @param content the characters to write
      * @throws IOException if there is an error writing data
@@ -530,6 +537,16 @@ public class JSONWriter {
         } else if (codePoint < 0x80) {
             // ASCII
             buffer.put((byte) codePoint);
+        } else if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+            // A surrogate that reaches here is unpaired (a pair has already been
+            // combined into one code point). It has no UTF-8 encoding, so write
+            // it as an escape, which is valid JSON and reads back as the same char
+            buffer.put((byte) '\\');
+            buffer.put((byte) 'u');
+            buffer.put((byte) hexChar((codePoint >> 12) & 0xF));
+            buffer.put((byte) hexChar((codePoint >> 8) & 0xF));
+            buffer.put((byte) hexChar((codePoint >> 4) & 0xF));
+            buffer.put((byte) hexChar(codePoint & 0xF));
         } else {
             // Non-ASCII - encode as UTF-8
             writeUtf8CodePoint(codePoint);
