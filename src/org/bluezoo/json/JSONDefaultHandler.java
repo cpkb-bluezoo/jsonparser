@@ -31,6 +31,12 @@ package org.bluezoo.json;
  */
 public class JSONDefaultHandler implements JSONContentHandler {
 
+    /**
+     * Creates a handler that ignores every event.
+     */
+    public JSONDefaultHandler() {
+    }
+
     @Override
     public void startObject() throws JSONException {
     }

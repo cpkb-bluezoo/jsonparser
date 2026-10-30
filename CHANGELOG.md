@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-30
+
+A major release: the content handler interface and the `receive()` buffer
+contract change (see "Changed"), which is what finally makes the parser's
+memory independent of the size of the document and of any string in it.
+
 ### Fixed
 
 - **Documentation correction:** earlier releases (including the 1.2 changelog
@@ -48,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was short even for a single chunk). CRLF was also counted as two line
   breaks; CR, LF and CRLF are now each one, including when a chunk boundary
   falls between the CR and the LF.
+- `JSONException(String, Throwable)` passes the cause to the superclass
+  constructor instead of calling the overridable `initCause` from a
+  constructor, and `JSONException` declares a `serialVersionUID`.
+- The build has no compiler warnings, and `ant javadoc` no Javadoc errors or
+  warnings (headings in `JSONParser`'s class documentation, the undocumented
+  `JSONDefaultHandler` constructor). `build.xml` turns off only the
+  `-Xlint:options` category, which newer JDKs raise to say that targeting
+  Java 8, the supported baseline, is obsolete.
+- `JSONWriter` no longer relies on a switch fall-through when indenting.
 
 ### Added
 
@@ -58,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its buffer, and handles a surrogate pair split across two calls.
   `writeString(String)` remains for callers that already have the whole
   string.
+- `JSONParser.setStringChunkSize(int)`: the size in characters of the buffer
+  that string content is decoded into, which is also the most characters one
+  `stringValueContent` call carries. The default is 32768, and the minimum
+  16. The bytes of a string are decoded and delivered in pieces of at most
+  this size however large the buffer passed to `receive()` is, so the
+  parser's memory for strings is fixed by this setting and not by the size
+  of the input buffer. It takes effect from the next string.
 
 ### Changed
 
@@ -94,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left unconsumed in the caller's buffer, with `position()` stopped at it.
   The caller `compact()`s the buffer, reads more in after those bytes, and
   presents them again. The parser has two buffers: the caller's, and a
-  `CharBuffer` of the same capacity for string content.
+  fixed-size `CharBuffer` for string content (see `setStringChunkSize`).
   - A caller that passes a fresh buffer holding only new bytes (which 1.3
     tolerated) or that `clear()`s instead of `compact()`ing now gets a
     `JSONException`: the parser keeps a count and a hash of the unconsumed
@@ -113,9 +135,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Only keys of up to 64 bytes are interned in the key table, which lives as
   long as the parser, so it holds about a megabyte at most (10,000 keys)
   however long keys are allowed to be.
-- **Breaking:** the `JSONLocator` position reported with `endStringValue()`
-  is after the closing quote; `startStringValue()` reports the position
-  before the opening quote, where `stringValue(String)` used to.
+- **Breaking:** `JSONLocator` positions now follow the rule for SAX's
+  `org.xml.sax.Locator`, as its Javadoc already promised. Line and column
+  numbers start at 1 (columns started at 0), and the position is where an
+  event ends, the first character after the text associated with it (it was
+  the start of the token). A column counts UTF-16 units since the last line
+  end. So in `[1]` the start of the array is at column 2, the number at
+  column 3 and the end of the array at column 4. An object key is reported
+  after its closing quote; a string value as its opening quote, each piece
+  of its content and its closing quote; a number after its last digit.
 - **Breaking:** the default `setMaxNameLength` is now 4096 (was 50,000), and
   the limit is documented as raw bytes rather than characters (the code has
   always compared raw byte offsets). Documents with object keys longer than

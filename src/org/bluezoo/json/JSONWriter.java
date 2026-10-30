@@ -432,7 +432,8 @@ public class JSONWriter {
             case AFTER_VALUE:
                 ensureCapacity(1);
                 buffer.put((byte) ',');
-                // Fall through
+                writeIndent();
+                break;
             case INIT:
                 writeIndent();
                 break;

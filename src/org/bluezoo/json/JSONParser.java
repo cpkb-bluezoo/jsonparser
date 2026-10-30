@@ -23,7 +23,7 @@ import java.nio.ByteBuffer;
  * decoding only ever happens for the actual content of a string value/key,
  * never for structural characters, whitespace, numbers, or literals.
  *
- * <h3>Buffer Management Contract</h3>
+ * <h2>Buffer Management Contract</h2>
  * <p>This parser follows the standard non-blocking streaming contract:
  * <ul>
  *   <li>The caller provides a buffer in read mode (ready for get operations)</li>
@@ -45,14 +45,15 @@ import java.nio.ByteBuffer;
  * </ul>
  * <p><strong>Memory:</strong> memory use does not grow with document size or
  * string length. The parser has two buffers: the one passed to
- * {@code receive}, and a character buffer of the same capacity into which
- * string content is decoded and handed to the handler as it arrives
+ * {@code receive}, and a character buffer of fixed size (32768 characters by
+ * default, see {@link #setStringChunkSize}) into which string content is
+ * decoded and handed to the handler as it arrives
  * ({@link JSONContentHandler#startStringValue()},
  * {@link JSONContentHandler#stringValueContent(CharSequence)},
  * {@link JSONContentHandler#endStringValue()}). Keys are delivered whole, so
  * a key stays in the caller's buffer until complete.
  *
- * <h3>Usage (Streaming)</h3>
+ * <h2>Usage (Streaming)</h2>
  * <pre>{@code
  * JSONParser parser = new JSONParser();
  * parser.setContentHandler(myHandler);
@@ -66,14 +67,14 @@ import java.nio.ByteBuffer;
  * parser.close();
  * }</pre>
  *
- * <h3>Usage (InputStream)</h3>
+ * <h2>Usage (InputStream)</h2>
  * <pre>{@code
  * JSONParser parser = new JSONParser();
  * parser.setContentHandler(myHandler);
  * parser.parse(inputStream);
  * }</pre>
  *
- * <h3>Character Encoding</h3>
+ * <h2>Character Encoding</h2>
  * The parser assumes UTF-8 encoding by default. BOM detection is performed
  * on the first chunk.
  *
@@ -82,10 +83,12 @@ import java.nio.ByteBuffer;
 public class JSONParser {
 
     private static final int DEFAULT_BUFFER_SIZE = 8192;
+    private static final int DEFAULT_STRING_CHUNK_SIZE = 32768;
 
     private JSONContentHandler handler;
     private JSONTokenizer tokenizer;
     private final int bufferSize;
+    private int stringChunkSize = DEFAULT_STRING_CHUNK_SIZE;
 
     // Stream state
     private boolean checkedBom;
@@ -254,6 +257,34 @@ public class JSONParser {
     }
 
     /**
+     * Sets the size of the character buffer that string content is decoded
+     * into, which is also the most characters one
+     * {@link JSONContentHandler#stringValueContent(CharSequence)} call carries.
+     * Default 32768. However large the buffers passed to {@link #receive} are,
+     * the bytes of a string are decoded and delivered in pieces of at most this
+     * many characters, so the parser's memory for strings is fixed by this
+     * setting and not by the size of the input buffer. A larger value means
+     * fewer calls to the handler; a smaller one, a smaller buffer.
+     * <p>
+     * The value must be at least 16, enough for the longest escape sequence or
+     * multi-byte character. It takes effect from the next string, so it may be
+     * changed at any time.
+     *
+     * @param stringChunkSize the buffer size in characters
+     * @throws IllegalArgumentException if it is less than 16
+     */
+    public void setStringChunkSize(int stringChunkSize) {
+        if (stringChunkSize < JSONTokenizer.MIN_DECODE_ROOM) {
+            throw new IllegalArgumentException("String chunk size must be at least "
+                    + JSONTokenizer.MIN_DECODE_ROOM);
+        }
+        this.stringChunkSize = stringChunkSize;
+        if (tokenizer != null) {
+            tokenizer.setStringChunkSize(stringChunkSize);
+        }
+    }
+
+    /**
      * Parse a JSON document from an InputStream.
      * <p>
      * This is a convenience method that reads the input stream in chunks
@@ -355,7 +386,7 @@ public class JSONParser {
 
         // Create tokenizer if needed
         if (tokenizer == null) {
-            tokenizer = new JSONTokenizer(handler, keySymbolTable, rejectDuplicateKeys, limits);
+            tokenizer = new JSONTokenizer(handler, keySymbolTable, rejectDuplicateKeys, limits, stringChunkSize);
         }
 
         // Tokenize directly against the raw bytes - no decode step for

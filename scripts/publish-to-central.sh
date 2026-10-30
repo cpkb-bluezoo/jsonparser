@@ -20,7 +20,7 @@
 #   CENTRAL_TOKEN_PASSWORD   - Sonatype Central user token password
 #
 # Optional:
-#   VERSION                  - the release version, e.g. 1.3 - if unset,
+#   VERSION                  - the release version, e.g. 2.0.0 - if unset,
 #                               auto-detected from pom.xml's own <version>.
 #                               Either way (given or auto-detected), it is
 #                               cross-checked against pom.xml and build.xml's

@@ -9,7 +9,9 @@ optimization effort can be targeted.
 This module is entirely self-contained under `benchmarks/`. It does not
 touch the main project's build, tests, or distribution artifact - it only
 consumes the jar the main Ant build already produces
-(`../dist/jsonparser-1.2.jar`). Nothing here is part of the release.
+(`../dist/jsonparser-<version>.jar`, with the version set by
+`jsonparser.version` in `build.xml`: currently 2.0.0). Nothing here is part of
+the release.
 
 ## Quick start
 
@@ -72,7 +74,9 @@ ant -Dbench.warmup=15 -Dbench.iterations=30 bench   # defaults
 | org.json | 20260522 | dom | the ubiquitous "reference" JSON library most Java developers reach for first |
 | minimal-json | 0.9.5 | dom | closest published competitor in philosophy - small, dependency-free, DOM-only |
 
-Only jsonparser has just a push/SAX streaming API. Gson and Jackson offer
+Only jsonparser has just a push/SAX streaming API, and it reports a string
+value as pieces of characters (`startStringValue`, `stringValueContent`,
+`endStringValue`) rather than as a `String`. Gson and Jackson offer
 both a low-level token stream and a DOM tree builder, matching the
 project's framing that Jackson's `readTree` and streaming paths are
 different code paths worth comparing separately. org.json and minimal-json
@@ -153,6 +157,18 @@ not arithmetically).
   necessity (e.g. Gson's `nextDouble()` vs Jackson's `getDoubleValue()`),
   but each does comparable value-extraction work per token, matching how
   each library is actually used.
+- The string handling is the biggest difference in what each API asks of its
+  caller. Gson and Jackson return a `String` per value, which their adapters
+  then hash. jsonparser's adapter hashes the characters as they arrive in
+  `stringValueContent`, without building a `String` (it computes the same
+  `String.hashCode()`, so the checksums still agree). A handler that needs a
+  `String` has to assemble one, which costs more than hashing in place, so on
+  string-heavy files these figures favour jsonparser more than a typical
+  application would see.
+- jsonparser is given each document as a single `ByteBuffer`, as the other
+  libraries are given the whole `byte[]`. Its memory for string content does
+  not depend on that: the parser decodes through a fixed 32768-character
+  buffer (`setStringChunkSize`) however large the buffer it is handed.
 - DOM-mode results are the cost of building the tree only; nothing further
   is done with it (the tree reference itself is what escapes to the
   volatile sink).

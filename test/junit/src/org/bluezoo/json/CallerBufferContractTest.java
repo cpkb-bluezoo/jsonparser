@@ -224,7 +224,7 @@ public class CallerBufferContractTest {
 
     @Test
     public void parseFromAStreamReportsAKeyTooBigForTheBuffer() throws Exception {
-        String doc = "{\"" + "k".repeat(100) + "\":1}";
+        String doc = "{\"" + repeat("k", 100) + "\":1}";
         JSONParser parser = new JSONParser(32);
         parser.disableAllLimits();
         parser.setContentHandler(new JSONDefaultHandler());
@@ -275,7 +275,7 @@ public class CallerBufferContractTest {
                 doc.append(k == 0 ? "" : ",").append("\"short").append(k).append("\":1");
             }
             for (int k = 0; k < 50; k++) {
-                doc.append(",\"long-").append(k).append('-').append("x".repeat(200)).append("\":1");
+                doc.append(",\"long-").append(k).append('-').append(repeat("x", 200)).append("\":1");
             }
             doc.append("}");
         }
@@ -288,6 +288,14 @@ public class CallerBufferContractTest {
         Field sizeField = table.getClass().getDeclaredField("size");
         sizeField.setAccessible(true);
         assertEquals("only the 30 short keys are interned", 30, ((Integer) sizeField.get(table)).intValue());
+    }
+
+    private static String repeat(String s, int times) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < times; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
     }
 
     private static void feed(JSONParser parser, String json, int chunk) throws JSONException {

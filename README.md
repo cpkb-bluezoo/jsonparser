@@ -2,13 +2,13 @@
 JSON parser and serializer for Java
 
 This is a tiny and efficient JSON parser and serialization library for
-Java. It takes up only 31KB (including the serialisation feature), as
+Java. It takes up only 38KB (including the serialisation feature), as
 opposed to object-mapping-based JSON parsers such as GSON (306KB) or
 Jackson (580KB for streaming alone, 2.3MB with object-mapping/databind
-support), and is fast and conformant. The streaming parser's memory use
-does not grow with document size, but it does grow with the size of the
-largest single string value or key, which is buffered until complete (see
-[Memory behaviour](#memory-behaviour)).
+support), and is fast and conformant. The streaming parser holds none of
+your bytes and decodes string content through a fixed-size buffer, so its
+memory use does not grow with the size of the document or of any string in
+it (see [Memory behaviour](#memory-behaviour)).
 
 Full JavaDoc documentation is included in the package, see the doc
 subdirectory.
@@ -143,21 +143,22 @@ This non-blocking approach means your application can:
 - Build reactive data pipelines where JSON parsing is a transformation stage
 - Handle multiple concurrent JSON streams without thread-per-connection
 - Process arbitrarily large documents with memory independent of document
-  size (subject to the string-length caveat in
-  [Memory behaviour](#memory-behaviour))
+  size (see [Memory behaviour](#memory-behaviour))
 
 ### Memory behaviour
 
 Memory use does not depend on the size of the document, or on the length of
 any string value in it. The parser holds none of the document's bytes: it has
-the buffer you pass to `receive()`, and a character buffer of the same
-capacity that string content is decoded into.
+the buffer you pass to `receive()`, and a character buffer of fixed size
+(32768 characters, set with `setStringChunkSize`) that string content is
+decoded into.
 
 - **String values are streamed.** A string is reported as
   `startStringValue()`, any number of `stringValueContent(CharSequence)`
   calls, then `endStringValue()`, as the bytes arrive. The parser decodes
-  into a character buffer of the same capacity as the byte buffer you pass
-  to `receive()` and hands it to your handler, so a 1GB string costs the
+  into its fixed-size character buffer, whatever the size of the buffer you
+  pass to `receive()`, and hands it to your handler in pieces of at most
+  `setStringChunkSize` characters (default 32768), so a 1GB string costs the
   same as a 10 byte one. The content is only valid during the call because
   the buffer is reused: copy it (for example `toString()`) if you need to
   keep it, and treat it as provisional until `endStringValue()`, since a
@@ -366,8 +367,8 @@ and less attack surface. Here's how the benchmarked libraries compare:
 
 | Library | Jar(s) | Size |
 |---|---|---|
-| jsonparser 1.3 | jsonparser | 31 KB |
 | minimal-json 0.9.5 | minimal-json | 33 KB |
+| jsonparser 2.0.0 | jsonparser | 38 KB |
 | org.json 20260522 | json | 87 KB |
 | Gson 2.14.0 | gson | 306 KB |
 | Jackson 2.22 (streaming only) | jackson-core | 580 KB |
@@ -390,7 +391,7 @@ so, add the following elements to your project's pom.xml:
     <dependency>
         <groupId>com.github.cpkb-bluezoo</groupId>
         <artifactId>jsonparser</artifactId>
-        <version>1.3</version>
+        <version>2.0.0</version>
     </dependency>
 </dependencies>
 ```

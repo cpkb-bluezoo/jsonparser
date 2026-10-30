@@ -57,6 +57,7 @@ class JSONTokenizer implements JSONLocator {
     private boolean inString;
     private long stringBytes; // raw content bytes of the current string value consumed so far
     private CharBuffer chars;
+    private int stringChunkSize; // capacity of chars: the most characters one content call carries
 
     // A number is read in a single forward pass, one byte at a time, keeping
     // only the value so far. It therefore needs no look-ahead and no
@@ -92,7 +93,7 @@ class JSONTokenizer implements JSONLocator {
     private boolean needsWhitespace; // Whether handler needs whitespace events
 
     private int lineNumber = 1;
-    private int columnNumber = 0;
+    private int columnNumber = 1;
     private boolean afterCR = false; // Last byte was a CR, so a following LF is the same line break
 
     // Track context for key vs value
@@ -160,8 +161,9 @@ class JSONTokenizer implements JSONLocator {
      *        owning {@link JSONParser})
      */
     JSONTokenizer(JSONContentHandler handler, KeySymbolTable keySymbolTable, boolean rejectDuplicateKeys,
-                  ParserLimits limits) {
+                  ParserLimits limits, int stringChunkSize) {
         this.handler = handler;
+        this.stringChunkSize = stringChunkSize;
         this.keySymbolTable = keySymbolTable;
         this.rejectDuplicateKeys = rejectDuplicateKeys;
         this.limits = limits;
@@ -234,7 +236,6 @@ class JSONTokenizer implements JSONLocator {
             // Save position for backtracking
             int saveLineNumber = lineNumber;
             int saveColumnNumber = columnNumber;
-            int startPos = data.position();
             data.mark();
 
             byte b = data.get();
@@ -253,17 +254,6 @@ class JSONTokenizer implements JSONLocator {
                 lineNumber = saveLineNumber;
                 columnNumber = saveColumnNumber;
                 return;
-            }
-
-            // Update column number based on bytes consumed
-            // (but not for whitespace, which handles its own line/column tracking,
-            // not for strings, which handle their own column tracking since a
-            // string's byte length and its UTF-16 source-character count can differ
-            // once multi-byte UTF-8 content or escape sequences are involved, and
-            // not for numbers, which add their length once they have ended)
-            if (!isWhitespace && b != '"' && b != '-' && (b < '0' || b > '9')) {
-                int bytesConsumed = data.position() - startPos;
-                columnNumber += bytesConsumed;
             }
         }
     }
@@ -294,8 +284,8 @@ class JSONTokenizer implements JSONLocator {
                 }
                 // A string value is streamed: report its start now and
                 // deliver its content as it arrives (see continueString)
-                handler.startStringValue();
                 columnNumber++;
+                handler.startStringValue();
                 inString = true;
                 stringBytes = 0;
                 seenAnyToken = true;
@@ -316,6 +306,7 @@ class JSONTokenizer implements JSONLocator {
                 if (limits.maxTokenCount > 0 && ++tokenCount > limits.maxTokenCount) {
                     throw new JSONException("Maximum token count exceeded: " + limits.maxTokenCount);
                 }
+                columnNumber++;
                 afterComma = true;
                 // After comma: expect key in object, value in array
                 state = (contextStack.peek() == Context.OBJECT) ? State.EXPECT_KEY : State.EXPECT_VALUE;
@@ -329,6 +320,7 @@ class JSONTokenizer implements JSONLocator {
                 if (limits.maxTokenCount > 0 && ++tokenCount > limits.maxTokenCount) {
                     throw new JSONException("Maximum token count exceeded: " + limits.maxTokenCount);
                 }
+                columnNumber++;
                 afterComma = false;
                 state = State.EXPECT_VALUE;
                 return true;
@@ -340,6 +332,7 @@ class JSONTokenizer implements JSONLocator {
                 if (limits.maxNestingDepth > 0 && depthStack.size() >= limits.maxNestingDepth) {
                     throw new JSONException("Maximum nesting depth exceeded: " + limits.maxNestingDepth);
                 }
+                columnNumber++;
                 handler.startObject();
                 contextStack.push(Context.OBJECT);
                 depthStack.push(Token.START_OBJECT);
@@ -366,6 +359,7 @@ class JSONTokenizer implements JSONLocator {
                 if (afterComma) {
                     throw new JSONException("Trailing comma before '}'");
                 }
+                columnNumber++;
                 handler.endObject();
                 contextStack.pop();
                 depthStack.pop();
@@ -387,6 +381,7 @@ class JSONTokenizer implements JSONLocator {
                 if (limits.maxNestingDepth > 0 && depthStack.size() >= limits.maxNestingDepth) {
                     throw new JSONException("Maximum nesting depth exceeded: " + limits.maxNestingDepth);
                 }
+                columnNumber++;
                 handler.startArray();
                 contextStack.push(Context.ARRAY);
                 depthStack.push(Token.START_ARRAY);
@@ -410,6 +405,7 @@ class JSONTokenizer implements JSONLocator {
                 if (afterComma) {
                     throw new JSONException("Trailing comma before ']'");
                 }
+                columnNumber++;
                 handler.endArray();
                 contextStack.pop();
                 depthStack.pop();
@@ -588,8 +584,8 @@ class JSONTokenizer implements JSONLocator {
                 if (rejectDuplicateKeys && !duplicateKeyStack.peek().add(value)) {
                     throw new JSONException("Duplicate key: " + value);
                 }
+                columnNumber += 2 + srcCharCount; // +2 for the opening/closing quotes
                 handler.key(value);
-                columnNumber += 2 + srcCharCount;
                 return true;
             }
 
@@ -688,8 +684,8 @@ class JSONTokenizer implements JSONLocator {
                 if (rejectDuplicateKeys && !duplicateKeyStack.peek().add(value)) {
                     throw new JSONException("Duplicate key: " + value);
                 }
-                handler.key(value);
                 columnNumber += 2 + srcCharCount; // +2 for the opening/closing quotes
+                handler.key(value);
                 return true;
             } else if (b == '\\') {
                 // Hit an escape - need to use StringBuilder from now on
@@ -754,7 +750,9 @@ class JSONTokenizer implements JSONLocator {
      *         needed to make progress
      */
     private boolean continueString(ByteBuffer data) throws JSONException {
-        ensureCharCapacity(data);
+        if (chars == null || chars.capacity() != stringChunkSize) {
+            chars = CharBuffer.allocate(stringChunkSize); // empty here, so nothing is lost
+        }
         int lengthLimit = limits.maxStringLength;
 
         while (true) {
@@ -768,20 +766,7 @@ class JSONTokenizer implements JSONLocator {
                 if (lengthLimit > 0 && stringBytes + (p - runStart) > lengthLimit) {
                     throw new JSONException("Maximum string length exceeded: " + lengthLimit);
                 }
-                if (chars.remaining() < p - runStart) {
-                    flushChars();
-                }
-                int before = chars.position();
-                data.limit(p);
-                try {
-                    // A delimiter follows the run, so a truncated trailing
-                    // sequence can never be completed: that is an error
-                    UTF8Decoder.decode(data, chars, p < end);
-                } finally {
-                    data.limit(end);
-                }
-                stringBytes += data.position() - runStart;
-                columnNumber += chars.position() - before;
+                decodeRun(data, runStart, p, end);
             }
 
             if (p == end) {
@@ -913,15 +898,56 @@ class JSONTokenizer implements JSONLocator {
     }
 
     /**
-     * Makes sure {@link #chars} can hold the decoded form of everything
-     * {@code data} could contain: UTF-8 never decodes to more chars than
-     * bytes. Only called with {@code chars} empty, so nothing is lost if it
-     * is replaced.
+     * Decodes the plain bytes {@code [from, to)} of {@code data} into
+     * {@link #chars}, in slices that fit what is free in it, handing the
+     * characters to the handler whenever it fills. So however much a receive
+     * buffer holds, a content call carries at most {@link #stringChunkSize}
+     * characters. UTF-8 never decodes to more chars than bytes, so a slice no
+     * longer than the free space always fits.
+     * <p>
+     * A multi-byte sequence cut off by the end of a slice is decoded in the
+     * next one; one cut off by the end of {@code data} itself ({@code to ==
+     * end}) is left unconsumed, with the position at its start.
+     *
+     * @param end the limit of {@code data}, restored after each slice
      */
-    private void ensureCharCapacity(ByteBuffer data) {
-        if (chars == null || chars.capacity() < data.remaining()) {
-            chars = CharBuffer.allocate(Math.max(data.capacity(), 64));
+    private void decodeRun(ByteBuffer data, int from, int to, int end) throws JSONException {
+        int pos = from;
+        while (pos < to) {
+            if (chars.remaining() < MIN_DECODE_ROOM) {
+                flushChars(); // a slice of a few bytes is not worth the call
+            }
+            int sliceEnd = Math.min(to, pos + chars.remaining());
+            boolean last = (sliceEnd == to);
+            int before = chars.position();
+            data.limit(sliceEnd);
+            try {
+                // A delimiter follows the run (to < end), so a truncated
+                // sequence at its very end can never be completed: an error
+                UTF8Decoder.decode(data, chars, last && to < end);
+            } finally {
+                data.limit(end);
+            }
+            int next = data.position();
+            stringBytes += next - pos;
+            columnNumber += chars.position() - before;
+            pos = next;
+            if (pos < sliceEnd && last) {
+                return; // cut off by the end of the data: wait for more
+            }
+            // Otherwise a sequence cut off by the end of the slice is decoded
+            // by the next one, which has room for it: fewer than
+            // MIN_DECODE_ROOM free chars flushes at the top of the loop
         }
+    }
+
+    // Decoding a run in slices needs at least this much free room in chars; a
+    // chunk size below it could not hold the longest escape or character
+    static final int MIN_DECODE_ROOM = 16;
+
+    /** Sets the most characters one content call may carry; takes effect from the next string. */
+    void setStringChunkSize(int stringChunkSize) {
+        this.stringChunkSize = stringChunkSize;
     }
 
     /** Hands any decoded characters to the handler and empties the buffer. */
@@ -1075,11 +1101,11 @@ class JSONTokenizer implements JSONLocator {
             if (!afterCR) {
                 lineNumber++;
             }
-            columnNumber = 0;
+            columnNumber = 1;
             afterCR = false;
         } else if (b == '\r') {
             lineNumber++;
-            columnNumber = 0;
+            columnNumber = 1;
             afterCR = true;
         } else {
             columnNumber++;
@@ -1130,6 +1156,7 @@ class JSONTokenizer implements JSONLocator {
 
         data.position(pos + len);
 
+        columnNumber += len + 1; // the rest of the literal, and its first character
         if (boolValue != null) {
             handler.booleanValue(boolValue);
         } else {
@@ -1155,7 +1182,7 @@ class JSONTokenizer implements JSONLocator {
             }
         }
 
-        // Call appropriate handler method
+        columnNumber += remaining.length() + 1; // the rest of the literal, and its first character
         if (boolValue != null) {
             handler.booleanValue(boolValue);
         } else {
@@ -1416,8 +1443,8 @@ class JSONTokenizer implements JSONLocator {
         Number number = numberIsReal ? realValue() : integerValue();
         numberState = NUM_NONE;
         state = State.AFTER_VALUE;
-        handler.numberValue(number);
         columnNumber += numberLength;
+        handler.numberValue(number);
     }
 
     private Number integerValue() {

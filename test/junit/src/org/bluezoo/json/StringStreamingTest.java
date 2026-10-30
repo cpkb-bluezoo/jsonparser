@@ -270,6 +270,174 @@ public class StringStreamingTest {
         }
     }
 
+    private static String repeat(char c, int times) {
+        char[] chars = new char[times];
+        java.util.Arrays.fill(chars, c);
+        return new String(chars);
+    }
+
+    /** A string mixing 1, 2, 3 and 4 byte UTF-8 and escapes, so slices of any size meet every kind of boundary. */
+    private static String mixedJson(int units, StringBuilder expected) {
+        StringBuilder json = new StringBuilder("[\"");
+        for (int i = 0; i < units; i++) {
+            switch (i % 5) {
+                case 0: json.append("ab"); expected.append("ab"); break;
+                case 1: json.append("\u00e9"); expected.append("\u00e9"); break;
+                case 2: json.append("\u20ac"); expected.append("\u20ac"); break;
+                case 3: json.append("\ud83d\ude00"); expected.append("\ud83d\ude00"); break;
+                default: json.append("\\ud83d\\ude00\\n"); expected.append("\ud83d\ude00\n"); break;
+            }
+        }
+        return json.append("\"]").toString();
+    }
+
+    private static Recorder parseWithChunkSize(String json, int stringChunkSize, int receiveChunk) throws JSONException {
+        Recorder handler = new Recorder();
+        JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
+        parser.setStringChunkSize(stringChunkSize);
+        parser.setContentHandler(handler);
+        feed(parser, json.getBytes(StandardCharsets.UTF_8), receiveChunk);
+        parser.close();
+        return handler;
+    }
+
+    @Test
+    public void contentPiecesNeverExceedTheChunkSize() throws Exception {
+        // the whole document in one receive buffer: only the chunk size limits a piece
+        StringBuilder expected = new StringBuilder();
+        String json = mixedJson(4000, expected);
+        for (int size : new int[] {16, 17, 31, 64, 1000}) {
+            Recorder r = parseWithChunkSize(json, size, json.length() * 4);
+            assertEquals("chunk size " + size, expected.toString(), r.joinedContent());
+            for (String piece : r.contents) {
+                assertTrue("chunk size " + size + " piece of " + piece.length(), piece.length() <= size);
+            }
+            assertTrue("split into many pieces", r.contents.size() >= expected.length() / size);
+        }
+    }
+
+    @Test
+    public void sliceBoundariesCutThroughMultiByteCharactersSafely() throws Exception {
+        // One long run with no escapes in it, so it is cut into slices at
+        // arbitrary bytes, many of them in the middle of a 2, 3 or 4 byte
+        // character; every cut must be resumed in the next slice
+        StringBuilder value = new StringBuilder();
+        for (int i = 0; i < 3000; i++) {
+            value.append("a\u00e9\u20ac\ud83d\ude00");
+        }
+        String json = "[\"" + value + "\"]";
+        for (int size = 16; size <= 40; size++) {
+            Recorder r = parseWithChunkSize(json, size, json.length() * 4);
+            assertEquals("chunk size " + size, value.toString(), r.joinedContent());
+            for (String piece : r.contents) {
+                assertTrue("chunk size " + size, piece.length() <= size);
+            }
+        }
+        // and the same when the receive buffer is itself small and cuts the run first
+        for (int receive : new int[] {1, 3, 5, 7}) {
+            Recorder r = parseWithChunkSize(json, 17, receive);
+            assertEquals("receive " + receive, value.toString(), r.joinedContent());
+        }
+    }
+
+    @Test
+    public void malformedUtf8InTheMiddleOfASlicedRunIsStillRejected() throws Exception {
+        // a lone continuation byte far into a long run that is delivered in slices
+        byte[] prefix = ("[\"" + repeat('a', 500)).getBytes(StandardCharsets.UTF_8);
+        byte[] doc = new byte[prefix.length + 4];
+        System.arraycopy(prefix, 0, doc, 0, prefix.length);
+        doc[prefix.length] = (byte) 0x80;
+        doc[prefix.length + 1] = 'b';
+        doc[prefix.length + 2] = '"';
+        doc[prefix.length + 3] = ']';
+        JSONParser parser = new JSONParser();
+        parser.disableAllLimits();
+        parser.setStringChunkSize(16);
+        parser.setContentHandler(new Recorder());
+        try {
+            feed(parser, doc, doc.length);
+            parser.close();
+            fail("a stray continuation byte must be rejected");
+        } catch (JSONException expected) {
+            // rejected
+        }
+    }
+
+    @Test
+    public void chunkSizeAndReceiveChunkingAreIndependent() throws Exception {
+        StringBuilder expected = new StringBuilder();
+        String json = mixedJson(200, expected);
+        for (int size : new int[] {16, 17, 19, 64}) {
+            for (int receive = 1; receive <= 11; receive++) {
+                Recorder r = parseWithChunkSize(json, size, receive);
+                assertEquals("chunk size " + size + " receive " + receive, expected.toString(), r.joinedContent());
+                for (String piece : r.contents) {
+                    assertTrue(piece.length() <= size);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void defaultChunkSizeIs32KAndIndependentOfTheReceiveBuffer() throws Exception {
+        StringBuilder sb = new StringBuilder("[\"");
+        for (int i = 0; i < 100_000; i++) {
+            sb.append('a');
+        }
+        sb.append("\"]");
+        Recorder handler = new Recorder();
+        JSONParser parser = new JSONParser();
+        parser.setContentHandler(handler);
+        // a single 100KB receive buffer
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        ByteBuffer buffer = ByteBuffer.allocate(bytes.length);
+        buffer.put(bytes).flip();
+        parser.receive(buffer);
+        parser.close();
+
+        int longest = 0;
+        for (String piece : handler.contents) {
+            longest = Math.max(longest, piece.length());
+        }
+        assertEquals(32768, longest);
+        assertEquals(100_000, handler.joinedContent().length());
+        assertEquals("character buffer is the chunk size, not the receive buffer size",
+                32768, capacityOf(parser, "chars", false));
+    }
+
+    @Test
+    public void tooSmallAChunkSizeIsRejected() throws Exception {
+        JSONParser parser = new JSONParser();
+        parser.setStringChunkSize(16);
+        try {
+            parser.setStringChunkSize(15);
+            fail("a chunk must hold the longest escape or character");
+        } catch (IllegalArgumentException expected) {
+            // rejected
+        }
+    }
+
+    @Test
+    public void chunkSizeCanBeChangedBetweenStrings() throws Exception {
+        Recorder handler = new Recorder();
+        JSONParser parser = new JSONParser();
+        parser.setContentHandler(handler);
+        parser.setStringChunkSize(64);
+        ByteBuffer buffer = ByteBuffer.allocate(1 << 16);
+        buffer.put(("[\"" + repeat('a', 300) + "\"").getBytes(StandardCharsets.UTF_8)).flip();
+        parser.receive(buffer);
+        buffer.compact();
+        int firstStringPieces = handler.contents.size();
+        assertTrue(firstStringPieces >= 300 / 64);
+
+        parser.setStringChunkSize(1024); // takes effect for the next string
+        buffer.put((",\"" + repeat('b', 300) + "\"]").getBytes(StandardCharsets.UTF_8)).flip();
+        parser.receive(buffer);
+        parser.close();
+        assertEquals("one piece for the second string", firstStringPieces + 1, handler.contents.size());
+    }
+
     @Test
     public void memoryDoesNotGrowWithStringLength() throws Exception {
         // 64MB of string content in 8KB chunks: nothing the parser holds may
@@ -306,7 +474,7 @@ public class StringStreamingTest {
         assertTrue("all of the content was delivered", total[0] >= (long) chunks * (chunk - 2));
 
         assertEquals("nothing was left unconsumed", 0, buffer.remaining());
-        assertTrue("character buffer stayed small", capacityOf(parser, "chars", false) <= 64 * 1024);
+        assertEquals("character buffer is the fixed chunk size", 32768, capacityOf(parser, "chars", false));
     }
 
     /** Capacity of a private CharBuffer field of the parser's tokenizer (or of a ByteBuffer field of the parser). */
