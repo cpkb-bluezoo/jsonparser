@@ -86,10 +86,10 @@
     <!-- Internal state -->
     <g transform="translate(480, 210)">
       <rect x="0" y="0" width="240" height="70" rx="3" fill="#1a5490" opacity="0.5"/>
-      <text x="120" y="18" text-anchor="middle" class="small-text" fill="white">Internal State Buffer</text>
-      <text x="120" y="35" text-anchor="middle" class="small-text" fill="#ecf0f1">• Token accumulation</text>
-      <text x="120" y="50" text-anchor="middle" class="small-text" fill="#ecf0f1">• Position tracking</text>
-      <text x="120" y="65" text-anchor="middle" class="small-text" fill="#ecf0f1">• Incomplete token buffering</text>
+      <text x="120" y="18" text-anchor="middle" class="small-text" fill="white">Parser State (holds no bytes)</text>
+      <text x="120" y="35" text-anchor="middle" class="small-text" fill="#ecf0f1">• Partial tokens stay in your buffer</text>
+      <text x="120" y="50" text-anchor="middle" class="small-text" fill="#ecf0f1">• Strings &amp; numbers: read as they arrive</text>
+      <text x="120" y="65" text-anchor="middle" class="small-text" fill="#ecf0f1">• Position tracking (line, column)</text>
     </g>
     
     <!-- close() method -->
@@ -103,22 +103,24 @@
 
   <!-- JSON Events -->
   <g id="events">
-    <rect x="790" y="120" width="160" height="200" rx="8" class="box" opacity="0.9"/>
+    <rect x="790" y="120" width="160" height="222" rx="8" class="box" opacity="0.9"/>
     <text x="870" y="145" text-anchor="middle" class="label">JSON Events</text>
     <text x="870" y="161" text-anchor="middle" class="small-text">(Immediate)</text>
     
     <!-- Event list -->
     <g transform="translate(800, 175)">
       <text x="70" y="0" text-anchor="middle" class="code">startObject()</text>
-      <text x="70" y="20" text-anchor="middle" class="code">key("name")</text>
-      <text x="70" y="40" text-anchor="middle" class="code">stringValue("Alice")</text>
-      <text x="70" y="60" text-anchor="middle" class="code">key("age")</text>
-      <text x="70" y="80" text-anchor="middle" class="code">numberValue(30)</text>
-      <text x="70" y="100" text-anchor="middle" class="code">endObject()</text>
+      <text x="70" y="17" text-anchor="middle" class="code">key("name")</text>
+      <text x="70" y="34" text-anchor="middle" class="code">startStringValue()</text>
+      <text x="70" y="51" text-anchor="middle" class="code">stringValueContent(…)</text>
+      <text x="70" y="68" text-anchor="middle" class="code">endStringValue()</text>
+      <text x="70" y="85" text-anchor="middle" class="code">key("age")</text>
+      <text x="70" y="102" text-anchor="middle" class="code">numberValue(30)</text>
+      <text x="70" y="119" text-anchor="middle" class="code">endObject()</text>
     </g>
     
-    <text x="870" y="290" text-anchor="middle" class="small-text">Semantic tokens</text>
-    <text x="870" y="305" text-anchor="middle" class="small-text">Emitted immediately</text>
+    <text x="870" y="312" text-anchor="middle" class="small-text">Semantic tokens</text>
+    <text x="870" y="327" text-anchor="middle" class="small-text">Emitted immediately</text>
   </g>
 
   <!-- Arrow from parser to events -->
@@ -241,7 +243,7 @@
 
   <!-- Footer -->
   <text x="600" y="680" text-anchor="middle" class="small-text" fill="#95a5a6">
-    JSONParser integrates seamlessly into NIO/async architectures • No blocking • Constant memory • Immediate results
+    JSONParser integrates seamlessly into NIO/async architectures • No blocking • Memory independent of document size • Immediate results
   </text>
 </svg>
 
