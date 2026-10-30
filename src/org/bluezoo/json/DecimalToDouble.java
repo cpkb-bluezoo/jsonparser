@@ -42,6 +42,16 @@ import java.math.BigInteger;
  * See also Lemire, "Number Parsing at a Gigabyte per Second" (2021). The
  * table of powers of five is generated on first use rather than stored, to
  * keep the class files small.
+ * <p>
+ * <strong>Acknowledgement.</strong> This is a Java implementation of the
+ * algorithm as implemented in Daniel Lemire's fast_float library
+ * (https://github.com/fastfloat/fast_float), whose structure it follows
+ * closely: Clinger's fast path, the 128-bit table of powers of five and the way
+ * the table is built, the refinement of the product with a second multiplication,
+ * and the handling of halfway and subnormal results. fast_float is available
+ * under the Apache License 2.0, the MIT license and the Boost Software License
+ * 1.0. Nothing is inherited from its correctness, though: this port is checked
+ * bit for bit against {@link Double#parseDouble} (see {@code NumberRoundingTest}).
  *
  * @author <a href='mailto:dog@gnu.org'>Chris Burdess</a>
  */

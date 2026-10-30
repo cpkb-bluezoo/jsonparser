@@ -38,9 +38,9 @@ coordinates:
 </dependency>
 ```
 
-Gradle: `implementation 'org.bluezoo:jsonparser:2.0.0'`. It needs Java 8 or
-later. To build from source, run `ant release`; the jar is written to
-`dist/`.
+Gradle: `implementation 'org.bluezoo:jsonparser:2.0.0'`. It runs on Java 8 or
+later. To build from source you need JDK 9 or later: run `ant release` and
+the jar is written to `dist/`.
 
 [API documentation](https://cpkb-bluezoo.github.io/jsonparser/doc/)
 
@@ -208,3 +208,9 @@ JSON cannot represent.
 
 This project is licensed under the GNU Lesser General Public License v3.0
 (LGPLv3). See the [COPYING](COPYING) file for details.
+
+## Acknowledgements
+
+Converting real numbers to doubles uses the Eisel-Lemire algorithm, following
+Daniel Lemire's [fast_float](https://github.com/fastfloat/fast_float)
+library (Apache-2.0, MIT or BSL-1.0).

@@ -22,7 +22,7 @@
     <packaging>jar</packaging>
 
     <name>JSON Library</name>
-    <description>A simple JSON parsing library.</description>
+    <description>A fast and tiny JSON parser</description>
     <url>https://github.com/cpkb-bluezoo/jsonparser</url>
 
     <licenses>
