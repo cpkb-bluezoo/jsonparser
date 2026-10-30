@@ -365,8 +365,16 @@ overall:
 
 ![Benchmark comparison: total parse time across a varied JSON corpus, by library and mode - smaller is better](benchmarks/benchmark-comparison.svg)
 
-See [benchmarks/](benchmarks/README.md) for the full methodology and how
-to reproduce these figures yourself.
+Each bar is the total time to parse the whole corpus, and each coloured
+segment is one corpus file's share of it. Over three full runs of a 2.0.0
+build on one machine (not otherwise idle), jsonparser's total was 83-88 ms,
+against 118-124 ms for Jackson's and Gson's streaming APIs, 127-129 ms for
+minimal-json, 143-156 ms for Gson's and Jackson's DOM modes, and 304-314 ms
+for org.json. A single run varies by about 5%, and the chart shows the middle
+one. jsonparser's streaming adapter hashes string content as it arrives
+without building a `String`, which the others' APIs do not allow; see the
+caveats in [benchmarks/](benchmarks/README.md), which also has the full
+methodology and how to reproduce these figures yourself.
 
 Size matters too - a smaller jar means less to download, less to load,
 and less attack surface. Here's how the benchmarked libraries compare:

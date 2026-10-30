@@ -191,6 +191,23 @@
     </java>
   </target>
 
+  <target name="chart" depends="build, git-info"
+          description="Draw benchmark-comparison.svg (the chart in the main README) from a run's CSV. Defaults to the current commit's results; override with -Dbench.csv=results/results-&lt;sha&gt;.csv">
+    <available file="${bench.csv}" property="bench.csv.present"/>
+    <fail unless="bench.csv.present">
+      No results file at ${bench.csv} - run 'ant bench' first, or pass
+      -Dbench.csv=results/results-&lt;sha&gt;.csv to chart a different commit's results.
+    </fail>
+    <java classname="org.bluezoo.json.bench.Chart" fork="true" failonerror="true">
+      <classpath>
+        <path refid="classpath"/>
+        <pathelement location="${build}"/>
+      </classpath>
+      <arg value="${bench.csv}"/>
+      <arg value="${basedir}/benchmark-comparison.svg"/>
+    </java>
+  </target>
+
   <target name="clean" description="Remove compiled classes and results (keeps downloaded deps/corpus)">
     <delete dir="${build}"/>
   </target>

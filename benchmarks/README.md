@@ -22,6 +22,7 @@ ant release
 cd benchmarks
 ant bench     # downloads deps + corpus (first run only), then runs the full matrix
 ant report    # prints a formatted comparison table from the last run
+ant chart     # redraws benchmark-comparison.svg, the chart in the main README
 ```
 
 `ant bench` fetches ~6 competitor jars from Maven Central and three
@@ -57,6 +58,23 @@ regardless of what commit you currently have checked out:
 ```sh
 ant report -Dbench.csv=results/results-<sha>.csv
 ```
+
+### The chart
+
+`ant chart` redraws `benchmark-comparison.svg`, the chart in the main README,
+from a run's CSV (the current commit's by default, or
+`-Dbench.csv=results/results-<sha>.csv`). It is a horizontal stacked bar chart
+with one row per library and mode, fastest first. A row's length is the sum of
+that library/mode's median time over every corpus file, and each coloured
+segment is one corpus file's share of it. The segments run in descending order
+of how much time each file takes summed over all rows, and the files beyond the
+ten largest contributors are grouped as "other". It also prints the
+whole-corpus totals and each library's time relative to jsonparser.
+
+A single run of this harness varies by around 5% in jsonparser's own total
+(more for some files), so the figures in the main README come from the middle
+of three runs, ordered by jsonparser's total. The three runs are quoted there
+as ranges.
 
 Iteration counts are configurable:
 

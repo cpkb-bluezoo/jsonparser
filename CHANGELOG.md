@@ -63,6 +63,13 @@ memory independent of the size of the document and of any string in it.
   `-Xlint:options` category, which newer JDKs raise to say that targeting
   Java 8, the supported baseline, is obsolete.
 - `JSONWriter` no longer relies on a switch fall-through when indenting.
+- `JSONWriter.writeNumber` wrote NaN and the infinities as `NaN`, `Infinity`
+  and `-Infinity`, which are not JSON, and which this library's own parser
+  rejects. It now throws `IllegalArgumentException` for a `Double` or `Float`
+  with one of those values, before writing anything, so the writer can carry
+  on as if the call had not been made. JSON has no representation for them,
+  and silently changing the value (to `null` or a string) would hide the
+  problem from the caller.
 - `JSONWriter` wrote a Java string's unpaired surrogate (half of an emoji
   that lost its other half, for example) as the three bytes `ED A0 BD`,
   which are not valid UTF-8, so this library's own parser rejected what its
@@ -82,6 +89,10 @@ memory independent of the size of the document and of any string in it.
   its buffer, and handles a surrogate pair split across two calls.
   `writeString(String)` remains for callers that already have the whole
   string.
+- `ant chart` in the `benchmarks/` module draws the README's stacked-bar
+  comparison chart from a run's CSV, so it can be reproduced rather than
+  edited by hand. The README's benchmark chart and figures were re-measured
+  for 2.0.0 (three full runs; jsonparser remains fastest overall).
 - `JSONParser.setStringChunkSize(int)`: the size in characters of the buffer
   that string content is decoded into, which is also the most characters one
   `stringValueContent` call carries. The default is 32768, and the minimum

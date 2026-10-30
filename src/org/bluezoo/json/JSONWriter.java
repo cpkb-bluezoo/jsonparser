@@ -343,11 +343,24 @@ public class JSONWriter {
 
     /**
      * Writes a number value.
+     * <p>
+     * JSON has no representation for NaN or the infinities, so a
+     * {@code Double} or {@code Float} with one of those values is rejected
+     * rather than written as text that no JSON parser would accept. The check
+     * comes before anything is written, so the writer can carry on as if the
+     * call had not been made.
      *
      * @param value the number value
+     * @throws IllegalArgumentException if the value is NaN or infinite
      * @throws IOException if there is an error writing data
      */
     public void writeNumber(Number value) throws IOException {
+        if (value instanceof Double || value instanceof Float) {
+            double d = value.doubleValue();
+            if (Double.isNaN(d) || Double.isInfinite(d)) {
+                throw new IllegalArgumentException("JSON cannot represent " + value);
+            }
+        }
         if (indentConfig != null) {
             writeIndentedValueStart();
         } else {
