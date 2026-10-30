@@ -200,9 +200,17 @@ public class JSONParser {
     }
 
     /**
-     * Sets the maximum number of characters in a single string value.
-     * Guards against a huge single-string memory allocation. Default
-     * 20,000,000 (matches Jackson). A value {@code <= 0} disables this check.
+     * Sets the maximum size in raw bytes (before unescaping, excluding the
+     * quotes) of a single string value. A value {@code <= 0} means no limit,
+     * which is the default.
+     * <p>
+     * The parser does not need this: a string is delivered to the handler a
+     * piece at a time through a fixed-size buffer, so a string of any length
+     * costs it the same. It is for a handler that accumulates strings, or a
+     * service that wants to reject oversize fields early. (Jackson, which
+     * returns a whole {@code String}, defaults to 20,000,000.) The limit is
+     * checked before each piece is delivered, so an over-long string is
+     * rejected without its excess being reported.
      *
      * @param maxStringLength the maximum string length, or {@code <= 0} to disable
      */

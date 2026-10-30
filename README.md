@@ -181,6 +181,9 @@ decoded into.
   digits dropped (roughly 1 in a few hundred to a few thousand such
   numbers), when it can be one unit in the last place out. Real numbers with
   19 or fewer significant digits are always exactly rounded.
+- String length is not limited by default, since it costs the parser nothing.
+  `setMaxStringLength` is there if your handler accumulates strings and you
+  want to cap them, or to reject oversize fields early.
 - Nesting costs a little per open array or object (`setMaxNestingDepth`,
   default 1000). The key-interning table holds at most 10,000 keys, and only
   keys of up to 64 bytes are interned.

@@ -153,6 +153,15 @@ memory independent of the size of the document and of any string in it.
   column 3 and the end of the array at column 4. An object key is reported
   after its closing quote; a string value as its opening quote, each piece
   of its content and its closing quote; a number after its last digit.
+- The default `setMaxStringLength` is now unlimited (was 20,000,000), and the
+  limit is documented as raw bytes rather than characters (it has always
+  counted raw bytes). The limit existed to bound the memory of a parser that
+  had to hold a whole string; strings are now streamed, so a string of any
+  length costs the parser the same, and the README's claim that a 1GB string
+  costs the same as a 10 byte one was false for a default parser, which
+  rejected anything over 20MB. `setMaxStringLength` remains as an opt-in cap
+  for handlers that accumulate strings. This only makes the parser more
+  permissive.
 - **Breaking:** the default `setMaxNameLength` is now 4096 (was 50,000), and
   the limit is documented as raw bytes rather than characters (the code has
   always compared raw byte offsets). Documents with object keys longer than

@@ -439,6 +439,39 @@ public class StringStreamingTest {
     }
 
     @Test
+    public void aDefaultParserHasNoLimitOnTheLengthOfAString() throws Exception {
+        // 40MB of string content with every setting at its default: streaming
+        // means length costs the parser nothing, so nothing should refuse it
+        JSONParser parser = new JSONParser();
+        final long[] total = new long[1];
+        parser.setContentHandler(new JSONDefaultHandler() {
+            @Override
+            public void stringValueContent(CharSequence content) {
+                total[0] += content.length();
+            }
+        });
+        int chunk = 8192;
+        byte[] filler = new byte[chunk];
+        java.util.Arrays.fill(filler, (byte) 'a');
+        ByteBuffer buffer = ByteBuffer.allocate(chunk);
+        buffer.put("[\"".getBytes(StandardCharsets.UTF_8)).flip();
+        parser.receive(buffer);
+        buffer.compact();
+        int chunks = 5000;
+        for (int i = 0; i < chunks; i++) {
+            buffer.put(filler, 0, buffer.remaining());
+            buffer.flip();
+            parser.receive(buffer);
+            buffer.compact();
+        }
+        buffer.put("\"]".getBytes(StandardCharsets.UTF_8)).flip();
+        parser.receive(buffer);
+        parser.close();
+        assertTrue("all of it was delivered: " + total[0], total[0] >= (long) chunks * (chunk - 2));
+        assertTrue("more than the old 20,000,000 limit", total[0] > 20_000_000L);
+    }
+
+    @Test
     public void memoryDoesNotGrowWithStringLength() throws Exception {
         // 64MB of string content in 8KB chunks: nothing the parser holds may
         // scale with that. Reflection reads the two internal buffers.
