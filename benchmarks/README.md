@@ -100,6 +100,20 @@ project's framing that Jackson's `readTree` and streaming paths are
 different code paths worth comparing separately. org.json and minimal-json
 have no streaming token API, so only DOM mode applies to them.
 
+### Jar sizes
+
+A smaller jar means less to download, less to load, and less attack surface.
+The libraries compared here, as published:
+
+| Library | Jar(s) | Size |
+|---|---|---|
+| minimal-json 0.9.5 | minimal-json | 33 KB |
+| jsonparser 2.0.0 | jsonparser | 38 KB |
+| org.json 20260522 | json | 87 KB |
+| Gson 2.14.0 | gson | 306 KB |
+| Jackson 2.22 (streaming only) | jackson-core | 580 KB |
+| Jackson 2.22 (with databind) | jackson-core + jackson-databind + jackson-annotations | 2.3 MB |
+
 To add another competitor: implement
 [`ParserAdapter`](src/org/bluezoo/json/bench/adapters/ParserAdapter.java) and
 register it in

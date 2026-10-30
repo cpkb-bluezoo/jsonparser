@@ -36,7 +36,7 @@ memory independent of the size of the document and of any string in it.
 - String values are now streamed, which resolves the above for strings; see
   "Changed".
 - README, package Javadoc and `JSONParser` Javadoc now state the real
-  behaviour (see "Memory behaviour" in the README).
+  behaviour (see "Memory and limits" in the README).
 - Real numbers are now correctly rounded, matching `Double.parseDouble`
   exactly. They were composed as `(int + frac / 10^k) * Math.pow(10, exp)`,
   which rounds several times and was off by one ulp for a large share of

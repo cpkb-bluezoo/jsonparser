@@ -61,6 +61,19 @@ public interface JSONContentHandler {
 
     /**
      * Notifies of a JSON number.
+     * <p>
+     * An integer is an Integer or a Long, or a BigInteger if it is too large
+     * for a Long, and is always exact. Any other number is a Double: with 19
+     * or fewer significant digits it is exactly the nearest double, as
+     * {@link Double#parseDouble} would give. With more digits than that the
+     * first 19 are used, which gives the same double unless a rounding
+     * boundary falls inside the digits dropped (roughly 1 in a few hundred to
+     * a few thousand such numbers), when it can be one unit in the last place
+     * out.
+     * <p>
+     * A number has no closing delimiter, so it is reported when the next byte
+     * shows that it has ended; a number that is the very end of the document
+     * is reported by {@link JSONParser#close()}.
      * @param number the number parsed: an Integer, Long or Double, or a
      * BigInteger for an integer too large for a Long
      * @throws JSONException the client may throw an exception during
